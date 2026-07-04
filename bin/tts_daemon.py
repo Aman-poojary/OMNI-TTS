@@ -165,8 +165,11 @@ def worker():
 
 
 def idle_watchdog():
+    import cleanup
+
     while True:
         time.sleep(60)
+        cleanup.sweep()  # age-based backstop for Codex / crashed sessions
         if _jobs.empty() and time.time() - _last_used > IDLE_EXIT_SECS:
             log("idle timeout, exiting")
             os._exit(0)
