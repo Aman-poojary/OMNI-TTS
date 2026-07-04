@@ -35,11 +35,12 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import ARMED_DIR, DEFAULTS, JARVIS_HOME, MODELS_DIR, SESSIONS_DIR  # noqa: E402
+from config import ARMED_DIR, DEFAULTS, JARVIS_HOME, MODELS_DIR, SESSIONS_DIR, load_config  # noqa: E402
 from textproc import chunk_text  # noqa: E402
 
 PORT = int(os.environ.get("JARVIS_TTS_PORT", "7739"))
 IDLE_EXIT_SECS = int(os.environ.get("JARVIS_TTS_IDLE_EXIT", "1800"))
+DEVICE_RETRY_SECS = 0.5
 
 _model = None
 _model_lock = threading.Lock()
@@ -192,6 +193,27 @@ def _put_sentinel(q):
                 pass
 
 
+def _open_fresh_stream():
+    """Device rate + output stream against a freshly enumerated device list."""
+    import audio
+
+    audio.reset()
+    dst = audio.device_rate()
+    return dst, audio.open_output_stream(dst)
+
+
+def speak_system_fallback(job):
+    """Last-resort per-OS system TTS, so a dead audio device never means
+    silence (the system voice keeps working across device changes)."""
+    import fallback
+
+    try:
+        fallback.speak(job["text"], load_config(job["session"]).get("say_voice"))
+        event("fallback", session=job["session"], chars=len(job["text"]))
+    except Exception as e:
+        log(f"system fallback failed: {e!r}")
+
+
 def render_and_play(job):
     """Producer/consumer streaming: synthesize chunk N+1 while chunk N plays, so
     the first audio lands after one sentence instead of the whole reply."""
@@ -199,10 +221,28 @@ def render_and_play(job):
 
     abort = job["abort"]
     model = get_model()
-    dst = audio.device_rate()
     chunks = chunk_text(job["text"])
     if not chunks or abort.is_set():
         return  # stopped while we were setting up: don't touch the device
+
+    # The output device can change or vanish between jobs (AirPods, USB
+    # audio, display speakers); open against a fresh device list, retry once,
+    # and drop to the system TTS rather than staying silent.
+    try:
+        dst, stream = _open_fresh_stream()
+    except Exception as e:
+        event("device_error", session=job["session"], error=repr(e))
+        log(f"output device unavailable, retrying: {e!r}")
+        time.sleep(DEVICE_RETRY_SECS)
+        if abort.is_set():
+            return
+        try:
+            dst, stream = _open_fresh_stream()
+        except Exception as e:
+            event("device_error", session=job["session"], error=repr(e))
+            log(f"output device still unavailable, using system TTS: {e!r}")
+            speak_system_fallback(job)
+            return
 
     rendered = queue.Queue(maxsize=4)
 
@@ -229,11 +269,8 @@ def render_and_play(job):
 
     threading.Thread(target=produce, daemon=True).start()
 
-    if abort.is_set():
-        return
     event("play_start", session=job["session"], chars=len(job["text"]))
     started = time.time()
-    stream = audio.open_output_stream(dst)
     _set_current_stream(stream)
     try:
         while not abort.is_set():
@@ -242,8 +279,11 @@ def render_and_play(job):
                 break
             try:
                 stream.write(wave)
-            except Exception:
-                break  # aborted by /stop or device error
+            except Exception as e:
+                if not abort.is_set():  # /stop aborts the stream; that's not an error
+                    event("play_error", session=job["session"], error=repr(e))
+                    log(f"playback failed mid-stream: {e!r}")
+                break
     finally:
         # Unblock the producer no matter how we exited (stop, device error),
         # so it never spins on a queue nobody drains.
@@ -376,7 +416,8 @@ UI_HTML = """<!doctype html>
   .txt { color:#9aa7b5; }
   .kind { color:#d9a441; }
   .kind.play_start, .kind.play_done { color:#3fbf6f; }
-  .kind.stop, .kind.superseded, .kind.synth_error { color:#e05555; }
+  .kind.stop, .kind.superseded, .kind.synth_error,
+  .kind.device_error, .kind.play_error { color:#e05555; }
   pre { background:#0b0f13; border:1px solid #1e2630; border-radius:6px;
         padding:10px; overflow-x:auto; max-height:260px; overflow-y:auto;
         white-space:pre-wrap; }
