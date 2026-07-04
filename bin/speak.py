@@ -37,7 +37,15 @@ def main():
     if not should_speak(session_id):
         sys.exit(0)
 
+    # The provider may flush the new reply to the transcript a beat after Stop
+    # fires; payload returns "" until the post-prompt reply is visible, so poll
+    # briefly rather than re-speak the previous reply. Stay silent on timeout.
+    deadline = time.time() + 6.0
     raw = last_assistant_text(data)
+    while not raw and time.time() < deadline:
+        time.sleep(0.2)
+        raw = last_assistant_text(data)
+
     text = clean_for_speech(pick_speech_source(raw))
     debug_log(f"session={session_id!r} raw_len={len(raw)} spoken_len={len(text)}")
     if not text:
