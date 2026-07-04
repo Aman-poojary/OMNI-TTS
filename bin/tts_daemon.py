@@ -38,9 +38,36 @@ _model_lock = threading.Lock()
 _last_used = time.time()
 _jobs = queue.Queue()
 
+_interrupt = threading.Event()      # set by /stop; checked between chunks
+_stream_lock = threading.Lock()
+_current_stream = None              # the OutputStream currently playing
+
 
 def log(msg):
     print(f"[jarvis-ttsd] {msg}", flush=True)
+
+
+def _set_current_stream(stream):
+    global _current_stream
+    with _stream_lock:
+        _current_stream = stream
+
+
+def stop_all():
+    """Drain the pending queue and abort the utterance now playing."""
+    while True:
+        try:
+            _jobs.get_nowait()
+            _jobs.task_done()
+        except queue.Empty:
+            break
+    _interrupt.set()
+    with _stream_lock:
+        if _current_stream is not None:
+            try:
+                _current_stream.abort()
+            except Exception:
+                pass
 
 
 def configure_threads():
@@ -81,6 +108,7 @@ def render_and_play(text, voice, speed):
     the first audio lands after one sentence instead of the whole reply."""
     import audio
 
+    _interrupt.clear()
     model = get_model()
     dst = audio.device_rate()
     chunks = chunk_text(text)
@@ -92,6 +120,8 @@ def render_and_play(text, voice, speed):
     def produce():
         try:
             for chunk in chunks:
+                if _interrupt.is_set():
+                    break
                 samples, sr = model.create(chunk, voice=voice, speed=speed)
                 rendered.put(audio.resample(samples, sr, dst))
         except Exception as e:
@@ -102,15 +132,23 @@ def render_and_play(text, voice, speed):
     threading.Thread(target=produce, daemon=True).start()
 
     stream = audio.open_output_stream(dst)
+    _set_current_stream(stream)
     try:
-        while True:
+        while not _interrupt.is_set():
             wave = rendered.get()
             if wave is None:
                 break
-            stream.write(wave)
+            try:
+                stream.write(wave)
+            except Exception:
+                break  # aborted by /stop
     finally:
-        stream.stop()
-        stream.close()
+        _set_current_stream(None)
+        try:
+            stream.stop()
+            stream.close()
+        except Exception:
+            pass
 
 
 def worker():
@@ -159,6 +197,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/warmup":
             threading.Thread(target=warmup, daemon=True).start()
             self._respond(202, b"warming")
+            return
+        if self.path == "/stop":
+            stop_all()
+            self._respond(200, b"stopped")
             return
         if self.path != "/speak":
             self._respond(404, b"not found")
