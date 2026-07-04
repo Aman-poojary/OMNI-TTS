@@ -434,6 +434,7 @@ UI_HTML = """<!doctype html>
   @media (max-width:820px){ .grid { grid-template-columns:1fr; } }
   h2 { font-size:12px; text-transform:uppercase; letter-spacing:.07em;
        color:#7f8ea0; margin:20px 0 8px; font-weight:600; }
+  h2 .hint { text-transform:none; letter-spacing:0; font-weight:400; color:#5a6673; }
   table { border-collapse:collapse; width:100%; font-size:13px; }
   td, th { padding:5px 10px 5px 0; text-align:left; vertical-align:top;
            border-bottom:1px solid #1a222c; }
@@ -473,7 +474,7 @@ UI_HTML = """<!doctype html>
 
 <div class="grid">
   <div>
-    <h2>Sessions</h2>
+    <h2>Sessions <span class="hint">— voice is armed for these; "turn off" stops them speaking</span></h2>
     <table id="sessions"></table>
     <h2>Waiting to be spoken</h2>
     <table id="queue"></table>
@@ -486,9 +487,9 @@ UI_HTML = """<!doctype html>
 
 <details>
   <summary>Logs</summary>
-  <h2>hook.log <span class="txt">— the Stop hook that decides what to speak</span></h2>
+  <h2>hook.log <span class="hint">— the Stop hook that decides what to speak</span></h2>
   <pre id="hooklog"></pre>
-  <h2>daemon.log <span class="txt">— this speech engine's own output</span></h2>
+  <h2>daemon.log <span class="hint">— this speech engine's own output</span></h2>
   <pre id="daemonlog"></pre>
 </details>
 
@@ -516,6 +517,7 @@ const EV = {
   synth_error: ["⚠️", "Could not generate audio", "err"],
   device_error:["🔌", "Audio device problem", "err"],
   play_error:  ["⚠️", "Playback failed", "err"],
+  disarm:      ["🔕", "Voice turned off", ""],
   sweep:       ["🧹", "Cleaned up old sessions", ""],
 };
 function evDetail(e){
@@ -527,11 +529,13 @@ function evDetail(e){
   return "";
 }
 
-function stop(body){ return fetch("/stop", {method:"POST", body}).then(() => setTimeout(tick, 150)); }
-document.getElementById("stopall").onclick = () => stop("{}");
+function post(path, body){ return fetch(path, {method:"POST", body}).then(() => setTimeout(tick, 150)); }
+document.getElementById("stopall").onclick = () => post("/stop", "{}");
 document.addEventListener("click", e => {
-  const b = e.target.closest("[data-stop]");
-  if (b) stop(JSON.stringify({session_id: b.getAttribute("data-stop")}));
+  const stopBtn = e.target.closest("[data-stop]");
+  if (stopBtn) return post("/stop", JSON.stringify({session_id: stopBtn.getAttribute("data-stop")}));
+  const offBtn = e.target.closest("[data-disarm]");
+  if (offBtn) return post("/disarm", JSON.stringify({session_id: offBtn.getAttribute("data-disarm")}));
 });
 
 // Replace log text only when it changed, and keep it pinned to the bottom,
@@ -589,7 +593,7 @@ async function tick(){
       return `<tr><td class="sid mono">${sid(x.session)}</td><td>${b}</td>
         <td class="txt">${x.age_secs != null ? Math.floor(x.age_secs/60)+"m" : "—"}</td>
         <td class="txt">${x.override && Object.keys(x.override).length ? esc(JSON.stringify(x.override)) : "—"}</td>
-        <td><button class="btn sm" data-stop="${esc(x.session)}">stop</button></td></tr>`;
+        <td><button class="btn sm danger" data-disarm="${esc(x.session)}">turn off</button></td></tr>`;
     }).join("") || `<tr><td colspan="5" class="empty">No sessions have used the voice yet.</td></tr>`);
 
   document.getElementById("queue").innerHTML = s.queue.length
@@ -659,6 +663,19 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_body() or {}
             stop_jobs(body.get("session_id") or None)
             self._respond(200, b"stopped")
+            return
+        if self.path == "/disarm":
+            # Turn voice off for a session: remove its arming flag (so it drops
+            # off the UI and stops speaking future replies) AND stop any audio
+            # it has in flight. /stop only does the latter.
+            import armed
+            body = self._read_body() or {}
+            sid = body.get("session_id") or None
+            if sid:
+                armed.disarm(sid)
+                stop_jobs(sid)
+                event("disarm", session=sid)
+            self._respond(200, b"disarmed")
             return
         if self.path != "/speak":
             self._respond(404, b"not found")
