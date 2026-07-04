@@ -83,6 +83,36 @@ downloads are skipped if present. Your existing config is kept.
 | `/jarvis-stop` (Claude) / `$jarvis-stop` or `/prompts:jarvis-stop` (Codex) | Cut off the current spoken reply, staying armed |
 | `/jarvis-config` (Claude) / `$jarvis-config` or `/prompts:jarvis-config` (Codex) | Show/change per-session voice settings |
 
+### Context cost
+
+The Claude Code skills are built to stay out of your context window:
+
+- `jarvis-on/off/stop/config` set `disable-model-invocation: true`, so their
+  descriptions are never loaded into the session's skill listing — only
+  `/jarvis` (the one-shot) stays model-invocable for "say this aloud" asks.
+- The side-effect commands (arm, disarm, stop, status) run as `` !`cmd` ``
+  preprocessing inside the skill, so there is no Bash tool round-trip — a
+  `/jarvis-on` costs a few hundred tokens instead of a couple of thousand.
+- While voice mode is armed, a UserPromptSubmit hook injects a ~180-token
+  reminder per message so any model writes the 🔊 line correctly.
+
+### Zero-token control from the shell
+
+The installer writes a `jarvis` shim into `~/.jarvis/bin/`. Add that directory
+to your PATH (or alias it) and you can control the CURRENT session from any
+terminal without spending a single context token:
+
+```bash
+jarvis on      # arm — spoken replies until disarmed   (alias for: arm)
+jarvis arm | arm-once | disarm | stop | status
+jarvis config voice am_michael
+```
+
+The CLI targets the session that most recently received a prompt (recorded by
+the UserPromptSubmit hook), or pass `--session <id>` explicitly. The armed
+session's replies speak correctly with no skill invocation at all, because the
+per-message reminder hook carries the 🔊-line instructions.
+
 ## Status line + debug UI
 
 The Claude Code status line can show JARVIS state per session:

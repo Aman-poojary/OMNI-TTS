@@ -54,6 +54,21 @@ def copy_scripts():
     print(f"==> Copied scripts to {BIN}")
 
 
+def write_shell_shim():
+    """A `jarvis` launcher so arm/disarm/stop/config work from any terminal —
+    zero assistant-context cost compared to the in-session skills."""
+    if os.name == "nt":
+        shim = os.path.join(BIN, "jarvis.cmd")
+        with open(shim, "w", encoding="utf-8") as f:
+            f.write('@echo off\npython "%USERPROFILE%\\.jarvis\\bin\\cli.py" %*\n')
+    else:
+        shim = os.path.join(BIN, "jarvis")
+        with open(shim, "w", encoding="utf-8") as f:
+            f.write('#!/bin/sh\nexec python3 "$HOME/.jarvis/bin/cli.py" "$@"\n')
+        os.chmod(shim, 0o755)
+    print(f"==> Wrote shell shim {shim} (add {BIN} to PATH to use `jarvis` anywhere)")
+
+
 def write_config():
     if os.path.exists(CONFIG):
         print(f"==> Keeping existing {CONFIG}")
@@ -129,6 +144,7 @@ def main():
 
     make_dirs()
     copy_scripts()
+    write_shell_shim()
     write_config()
     build_venv()
     download_models()

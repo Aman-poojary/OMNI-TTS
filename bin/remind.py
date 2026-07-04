@@ -56,7 +56,10 @@ def main():
                     "you did. Straight to the point, no filler; as short or as "
                     "long as a complete answer requires. Plain conversational "
                     "prose only: no markdown, no code, no file paths. Address "
-                    "the user as 'sir' where natural."
+                    "the user as 'sir' where natural. If the user asks to stop "
+                    "talking, run `python3 ~/.jarvis/bin/cli.py stop`; to turn "
+                    "voice replies off, run `python3 ~/.jarvis/bin/cli.py "
+                    "disarm`."
                 ),
             }
         }))
