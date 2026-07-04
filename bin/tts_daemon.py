@@ -394,92 +394,223 @@ def status_payload():
 
 UI_HTML = """<!doctype html>
 <meta charset="utf-8">
-<title>JARVIS debug</title>
+<title>JARVIS voice — status</title>
 <style>
   :root { color-scheme: dark; }
-  body { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-         background:#101418; color:#cdd6e0; margin:0; padding:20px; }
-  h1 { font-size:16px; margin:0 0 4px; color:#e8eef5; }
-  h1 .dot { display:inline-block; width:10px; height:10px; border-radius:50%;
-            background:#e05555; margin-right:8px; }
-  h1 .dot.ok { background:#3fbf6f; }
-  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em;
-       color:#7f8ea0; margin:22px 0 6px; }
-  .meta { color:#7f8ea0; margin-bottom:10px; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+         background:#0d1117; color:#c9d4e0; margin:0; padding:24px; max-width:1080px; }
+  a { color:#6db3f2; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  header { display:flex; align-items:center; gap:12px; margin-bottom:4px; }
+  header h1 { font-size:19px; font-weight:600; margin:0; color:#e8eef5; flex:0 0 auto; }
+  .pill { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
+          padding:3px 10px; border-radius:999px; }
+  .pill .dot { width:8px; height:8px; border-radius:50%; background:currentColor; }
+  .pill.online { color:#3fbf6f; background:#123020; }
+  .pill.offline { color:#e05555; background:#301616; }
+  .spacer { flex:1; }
+  .btn { background:#1e2630; color:#c9d4e0; border:1px solid #2c3745;
+         border-radius:6px; padding:5px 12px; cursor:pointer; font:inherit; font-size:13px; }
+  .btn:hover { background:#2c3745; }
+  .btn.danger { color:#f0a0a0; border-color:#4a2626; }
+  .btn.danger:hover { background:#3a1c1c; }
+  .btn.sm { padding:2px 9px; font-size:12px; }
+  .sub { color:#6f7d8c; font-size:12.5px; margin:0 0 18px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+           gap:10px; margin-bottom:18px; }
+  .card { background:#151b23; border:1px solid #1e2630; border-radius:8px; padding:11px 13px; }
+  .card .label { color:#6f7d8c; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+  .card .value { font-size:17px; font-weight:600; color:#e8eef5; margin-top:3px; }
+  .card .value.good { color:#3fbf6f; } .card .value.warn { color:#d9a441; }
+  .card .value.muted { color:#7f8ea0; }
+  .now { display:flex; align-items:center; gap:12px; background:#122335;
+         border:1px solid #244b6e; border-radius:8px; padding:12px 14px; margin-bottom:18px; }
+  .now.idle { background:#151b23; border-color:#1e2630; color:#6f7d8c; }
+  .now .eq { font-size:20px; }
+  .now .who { color:#9dc7f5; font-weight:600; }
+  .now .say { color:#c9d4e0; flex:1; }
   .grid { display:grid; grid-template-columns:1fr 1fr; gap:0 28px; }
-  @media (max-width:900px){ .grid { grid-template-columns:1fr; } }
-  table { border-collapse:collapse; width:100%; }
-  td, th { padding:3px 10px 3px 0; text-align:left; vertical-align:top;
-           border-bottom:1px solid #1e2630; }
-  th { color:#7f8ea0; font-weight:normal; }
+  @media (max-width:820px){ .grid { grid-template-columns:1fr; } }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.07em;
+       color:#7f8ea0; margin:20px 0 8px; font-weight:600; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  td, th { padding:5px 10px 5px 0; text-align:left; vertical-align:top;
+           border-bottom:1px solid #1a222c; }
+  th { color:#6f7d8c; font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  tr:last-child td { border-bottom:none; }
   .sid { color:#6db3f2; }
-  .txt { color:#9aa7b5; }
-  .kind { color:#d9a441; }
-  .kind.play_start, .kind.play_done { color:#3fbf6f; }
-  .kind.stop, .kind.superseded, .kind.synth_error,
-  .kind.device_error, .kind.play_error { color:#e05555; }
-  pre { background:#0b0f13; border:1px solid #1e2630; border-radius:6px;
-        padding:10px; overflow-x:auto; max-height:260px; overflow-y:auto;
-        white-space:pre-wrap; }
-  button { background:#1e2630; color:#cdd6e0; border:1px solid #2c3745;
-           border-radius:5px; padding:2px 10px; cursor:pointer; font:inherit; }
-  button:hover { background:#2c3745; }
-  .now { background:#13202e; border:1px solid #204060; border-radius:6px;
-         padding:8px 12px; margin:6px 0; }
+  .txt { color:#8b98a6; }
+  .empty { color:#5a6673; font-style:italic; }
+  .badge { display:inline-block; font-size:11px; font-weight:600; padding:1px 7px; border-radius:5px; }
+  .badge.on { color:#3fbf6f; background:#123020; }
+  .badge.once { color:#d9a441; background:#2e2410; }
+  .badge.off { color:#7f8ea0; background:#1c232c; }
+  .ev { display:flex; gap:8px; align-items:baseline; padding:5px 0; border-bottom:1px solid #1a222c; }
+  .ev:last-child { border-bottom:none; }
+  .ev .ico { flex:0 0 auto; width:18px; text-align:center; }
+  .ev .msg { flex:1; }
+  .ev .when { color:#5a6673; font-size:11.5px; flex:0 0 auto; }
+  .ev.err .msg { color:#e88; }
+  .ev.good .msg { color:#7fc99a; }
+  details { margin-top:10px; }
+  summary { cursor:pointer; color:#7f8ea0; font-size:12px; text-transform:uppercase;
+            letter-spacing:.07em; font-weight:600; }
+  pre { background:#0a0e13; border:1px solid #1a222c; border-radius:6px; margin-top:8px;
+        padding:10px; overflow:auto; max-height:280px; white-space:pre-wrap;
+        font: 12px/1.5 ui-monospace, Menlo, monospace; color:#93a1af; }
 </style>
-<h1><span id="dot" class="dot"></span>JARVIS TTS daemon <button onclick="stopAll()" style="float:right">⏹ stop all</button></h1>
-<div class="meta" id="meta">connecting…</div>
-<div id="now"></div>
+<header>
+  <h1>JARVIS voice</h1>
+  <span id="pill" class="pill offline"><span class="dot"></span><span id="pilltxt">connecting…</span></span>
+  <span class="spacer"></span>
+  <button class="btn danger" id="stopall">⏹ Stop all speech</button>
+</header>
+<p class="sub" id="sub">Local text-to-speech daemon. This page refreshes every 2 seconds.</p>
+
+<div class="cards" id="cards"></div>
+<div class="now idle" id="now">Idle — nothing is playing right now.</div>
+
 <div class="grid">
   <div>
     <h2>Sessions</h2>
     <table id="sessions"></table>
-    <h2>Queue</h2>
+    <h2>Waiting to be spoken</h2>
     <table id="queue"></table>
-    <h2>Events</h2>
-    <table id="events"></table>
   </div>
   <div>
-    <h2>hook.log</h2><pre id="hooklog"></pre>
-    <h2>daemon.log</h2><pre id="daemonlog"></pre>
+    <h2>Recent activity</h2>
+    <div id="events"></div>
   </div>
 </div>
+
+<details>
+  <summary>Logs</summary>
+  <h2>hook.log <span class="txt">— the Stop hook that decides what to speak</span></h2>
+  <pre id="hooklog"></pre>
+  <h2>daemon.log <span class="txt">— this speech engine's own output</span></h2>
+  <pre id="daemonlog"></pre>
+</details>
+
 <script>
-const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-const short = s => esc(String(s).slice(0, 12));
-const hhmmss = t => new Date(t * 1000).toLocaleTimeString();
-function stopAll(){ fetch("/stop", {method:"POST", body:"{}"}); }
-function stopSession(sid){ fetch("/stop", {method:"POST", body: JSON.stringify({session_id: sid})}); }
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const sid = s => s ? esc(String(s).slice(0, 8)) : "—";
+const dur = sec => sec < 60 ? sec+"s" : Math.floor(sec/60)+"m "+(sec%60)+"s";
+function ago(t){
+  const d = Date.now()/1000 - t;
+  if (d < 2) return "just now";
+  if (d < 60) return Math.floor(d)+"s ago";
+  if (d < 3600) return Math.floor(d/60)+"m ago";
+  return Math.floor(d/3600)+"h ago";
+}
+
+// kind -> [icon, human label, css class]
+const EV = {
+  queued:      ["📥", "Queued for speech", ""],
+  play_start:  ["▶️", "Started speaking", "good"],
+  play_done:   ["✅", "Finished speaking", "good"],
+  superseded:  ["⏭️", "Replaced by a newer reply", ""],
+  stop:        ["⏹️", "Speech stopped", ""],
+  warmup:      ["🔥", "Voice model warmed up", "good"],
+  fallback:    ["🗣️", "Used the system voice (Kokoro unavailable)", "err"],
+  synth_error: ["⚠️", "Could not generate audio", "err"],
+  device_error:["🔌", "Audio device problem", "err"],
+  play_error:  ["⚠️", "Playback failed", "err"],
+  sweep:       ["🧹", "Cleaned up old sessions", ""],
+};
+function evDetail(e){
+  if (e.error) return esc(e.error);
+  if (e.kind === "play_done" && e.secs != null) return "took " + e.secs + "s";
+  if (e.removed != null) return e.removed + " removed";
+  if (e.text) return '"' + esc(e.text) + '"';
+  if (e.chars != null) return e.chars + " characters";
+  return "";
+}
+
+function stop(body){ return fetch("/stop", {method:"POST", body}).then(() => setTimeout(tick, 150)); }
+document.getElementById("stopall").onclick = () => stop("{}");
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-stop]");
+  if (b) stop(JSON.stringify({session_id: b.getAttribute("data-stop")}));
+});
+
+// Replace log text only when it changed, and keep it pinned to the bottom,
+// so the panel doesn't reset your scroll position on every refresh.
+function setLog(id, lines){
+  const el = document.getElementById(id);
+  const txt = lines.length ? lines.join("\\n") : "(nothing logged yet)";
+  if (el.textContent === txt) return;
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+  el.textContent = txt;
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+function offline(){
+  document.getElementById("pill").className = "pill offline";
+  document.getElementById("pilltxt").textContent = "daemon offline";
+}
+
 async function tick(){
   let s;
   try { s = await (await fetch("/status")).json(); }
-  catch(e){ document.getElementById("meta").textContent = "daemon unreachable";
-            document.getElementById("dot").className = "dot"; return; }
-  document.getElementById("dot").className = "dot ok";
-  document.getElementById("meta").textContent =
-    `pid ${s.pid} · port ${s.port} · ${s.warmed ? "model warm" : "model cold"}` +
-    ` · up ${Math.floor(s.uptime_secs/60)}m · queue ${s.queue.length}`;
-  document.getElementById("now").innerHTML = s.current
-    ? `<div class="now">▶ speaking <span class="sid">${short(s.current.session)}</span>
-       (${s.current.chars} ch) <span class="txt">${esc(s.current.text)}</span>
-       <button onclick="stopSession('${esc(s.current.session)}')">stop</button></div>` : "";
+  catch(e){ offline(); return; }
+
+  document.getElementById("pill").className = "pill online";
+  document.getElementById("pilltxt").textContent = "online";
+
+  const card = (label, value, cls) =>
+    `<div class="card"><div class="label">${label}</div><div class="value ${cls||''}">${value}</div></div>`;
+  document.getElementById("cards").innerHTML =
+    card("Voice model", s.warmed ? "Ready" : "Loading…", s.warmed ? "good" : "warn") +
+    card("Right now", s.speaking ? "Speaking" : "Idle", s.speaking ? "good" : "muted") +
+    card("Waiting", s.queue.length, s.queue.length ? "warn" : "muted") +
+    card("Uptime", dur(s.uptime_secs)) +
+    card("Process", '<span class="mono">' + s.pid + " · :" + s.port + "</span>", "muted");
+
+  const now = document.getElementById("now");
+  if (s.current){
+    now.className = "now";
+    now.innerHTML =
+      `<span class="eq">🔊</span>
+       <span><span class="who">${sid(s.current.session)}</span>
+       <div class="say">"${esc(s.current.text)}"</div></span>
+       <button class="btn sm danger" data-stop="${esc(s.current.session)}">stop</button>`;
+  } else {
+    now.className = "now idle";
+    now.textContent = "Idle — nothing is playing right now.";
+  }
+
   document.getElementById("sessions").innerHTML =
-    `<tr><th>session</th><th>armed</th><th>age</th><th>override</th><th></th></tr>` +
-    (s.sessions.map(x => `<tr><td class="sid">${short(x.session)}</td>
-      <td>${esc(x.armed || "—")}</td><td>${x.age_secs != null ? Math.floor(x.age_secs/60)+"m" : ""}</td>
-      <td class="txt">${x.override ? esc(JSON.stringify(x.override)) : ""}</td>
-      <td><button onclick="stopSession('${esc(x.session)}')">stop</button></td></tr>`).join("")
-     || `<tr><td class="txt">no session state on disk</td></tr>`);
+    `<tr><th>Session</th><th>Voice</th><th>Idle for</th><th>Custom settings</th><th></th></tr>` +
+    (s.sessions.map(x => {
+      const b = x.armed === "on" ? '<span class="badge on">armed</span>'
+              : x.armed === "once" ? '<span class="badge once">armed once</span>'
+              : '<span class="badge off">off</span>';
+      return `<tr><td class="sid mono">${sid(x.session)}</td><td>${b}</td>
+        <td class="txt">${x.age_secs != null ? Math.floor(x.age_secs/60)+"m" : "—"}</td>
+        <td class="txt">${x.override && Object.keys(x.override).length ? esc(JSON.stringify(x.override)) : "—"}</td>
+        <td><button class="btn sm" data-stop="${esc(x.session)}">stop</button></td></tr>`;
+    }).join("") || `<tr><td colspan="5" class="empty">No sessions have used the voice yet.</td></tr>`);
+
   document.getElementById("queue").innerHTML = s.queue.length
-    ? s.queue.map(q => `<tr><td class="sid">${short(q.session)}</td>
-        <td>${q.chars} ch</td><td class="txt">${esc(q.text)}</td></tr>`).join("")
-    : `<tr><td class="txt">empty</td></tr>`;
-  document.getElementById("events").innerHTML = s.events.slice().reverse().map(e =>
-    `<tr><td>${hhmmss(e.t)}</td><td class="kind ${esc(e.kind)}">${esc(e.kind)}</td>
-     <td class="sid">${short(e.session || "")}</td>
-     <td class="txt">${esc(e.text || e.error || (e.secs != null ? e.secs+"s" : "") || (e.removed != null ? e.removed+" removed" : ""))}</td></tr>`).join("");
-  document.getElementById("hooklog").textContent = s.logs.hook.join("\\n");
-  document.getElementById("daemonlog").textContent = s.logs.daemon.join("\\n");
+    ? `<tr><th>Session</th><th>Length</th><th>Preview</th></tr>` + s.queue.map(q =>
+        `<tr><td class="sid mono">${sid(q.session)}</td><td class="txt">${q.chars} chars</td>
+         <td class="txt">"${esc(q.text)}"</td></tr>`).join("")
+    : `<tr><td class="empty">Nothing waiting.</td></tr>`;
+
+  document.getElementById("events").innerHTML = s.events.length
+    ? s.events.slice().reverse().map(e => {
+        const [ico, label, cls] = EV[e.kind] || ["•", e.kind, ""];
+        const who = e.session ? ' <span class="sid mono">' + sid(e.session) + '</span>' : "";
+        const det = evDetail(e);
+        return `<div class="ev ${cls}"><span class="ico">${ico}</span>
+          <span class="msg">${esc(label)}${who}${det ? ' — <span class="txt">'+det+'</span>' : ''}</span>
+          <span class="when">${ago(e.t)}</span></div>`;
+      }).join("")
+    : `<div class="empty">No activity yet.</div>`;
+
+  setLog("hooklog", s.logs.hook);
+  setLog("daemonlog", s.logs.daemon);
 }
 tick(); setInterval(tick, 2000);
 </script>
