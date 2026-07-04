@@ -5,19 +5,19 @@ description: Answer one question aloud, JARVIS-style, via the TTS Stop hook (one
 
 # JARVIS one-shot spoken answer
 
-A Stop hook (`~/.claude/jarvis/bin/speak.py`) speaks the final reply aloud —
-but only when armed via flag files in `~/.claude/jarvis/`. This skill arms it
-for ONE reply. Related commands: `/jarvis-on`, `/jarvis-off`, `/jarvis-config`.
+A Stop hook (`~/.jarvis/bin/speak.py`) speaks the final reply aloud — but only
+when this session is armed. This skill arms it for ONE reply. Related commands:
+`/jarvis-on`, `/jarvis-off`, `/jarvis-config`, `/jarvis-stop`.
 
 ## Steps
 
-1. Arm the one-shot flag:
-   `mkdir -p ~/.claude/jarvis && touch ~/.claude/jarvis/speak_once`
-2. Answer the user's question normally (the arguments are the question).
-   If there is no question, just arm the flag and reply with something short
-   and JARVIS-like (e.g. "At your service, sir.").
-3. End the final message with the voice-summary line (see below). The hook
-   speaks that line once, then disarms itself.
+1. Arm the one-shot flag for this session (also warms the TTS daemon):
+   `python3 ~/.jarvis/bin/cli.py arm-once`
+2. Answer the user's question normally (the arguments are the question). If
+   there is no question, just arm and reply with something short and JARVIS-like
+   (e.g. "At your service, sir.").
+3. End the final message with the voice-summary line (below). The hook speaks
+   that line once, then the one-shot flag is consumed automatically.
 
 ## Writing the voice line (REQUIRED whenever a reply will be spoken)
 
@@ -28,27 +28,21 @@ End the final message with one paragraph starting with 🔊:
 ```
 
 Rules:
-- Start the line with 🔊 (the hook keys on it); keep it as the LAST
-  paragraph of the message.
-- Write it as JARVIS answering Tony Stark: directly answer what the user
-  asked — the actual findings, numbers, names, and conclusions — not a
-  meta-description of the work done ("I fixed it" is wrong; say what the
-  answer IS).
-- Straight to the point, no filler. As short or as long as a complete
-  answer requires.
-- Plain conversational prose for the ear: no markdown, no code, no file
-  paths, no symbols. Address the user as "sir" where natural.
+- Start the line with 🔊 (the hook keys on it); keep it as the LAST paragraph.
+- Write it as JARVIS answering Tony Stark: directly answer what the user asked —
+  the actual findings, numbers, names, conclusions — not a meta-description of
+  the work done.
+- Straight to the point, no filler. As short or long as a complete answer needs.
+- Plain conversational prose for the ear: no markdown, no code, no file paths,
+  no symbols. Address the user as "sir" where natural.
 - If the line is missing, the hook falls back to speaking the whole reply
-  (truncated at max_chars) — always write the line so the user hears a
-  proper spoken answer instead.
+  (truncated at max_chars) — always write the line.
 
-## How it speaks (for reference)
+## How it speaks (reference)
 
-- Engine: Kokoro-82M (ONNX) served by a warm local daemon
-  (`~/.claude/jarvis/bin/tts-daemon.py`, port 7739, auto-started, idles out
-  after 30 min). Falls back to macOS `say` if the daemon is unavailable.
-- Settings live in `~/.claude/jarvis/config.json` — change them with
-  `/jarvis-config`.
-- The hook never blocks: it detaches the speaker process and always exits 0.
-- Arming flags before answering is correct — the hook fires at Stop, after
-  the reply is complete.
+- Engine: Kokoro-82M served by a warm local daemon (`~/.jarvis/bin/tts_daemon.py`,
+  port 7739, auto-started, idles out after 30 min). Falls back to system TTS
+  (say / SAPI / espeak) if the daemon is unavailable.
+- Settings are per-session; change them with `/jarvis-config`.
+- The hook never blocks: it detaches the speaker and always exits 0.
+- Arming is per-session, so other sessions stay silent.
