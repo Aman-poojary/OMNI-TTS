@@ -33,10 +33,17 @@ def resolve_session(argv):
         i = argv.index("--session")
         if i + 1 < len(argv):
             return argv[i + 1]
+    # `last_session` is written by the UserPromptSubmit hook from the SAME
+    # payload session_id the Stop hook later uses, so it always matches the
+    # session that will actually be spoken. It must win over the env vars:
+    # in the Claude Code CLI, CLAUDE_SESSION_ID is a different id namespace
+    # than the hook payload session_id, so trusting it first armed a session
+    # the Stop hook never sees (reply shows 🔊 but nothing plays). The env
+    # vars remain a fallback for direct CLI use before any prompt is submitted.
     return (
-        os.environ.get("CLAUDE_SESSION_ID")
+        config.read_last_session()
+        or os.environ.get("CLAUDE_SESSION_ID")
         or os.environ.get("JARVIS_SESSION_ID")
-        or config.read_last_session()
     )
 
 

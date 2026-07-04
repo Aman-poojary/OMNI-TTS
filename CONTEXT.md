@@ -120,8 +120,14 @@ transcripts/history are read-only.
 
 ## Gotchas
 
-- Arming is **per-session**; the CLI resolves the session via `last_session`, so
-  a slash command run right after submitting the prompt targets the right session.
+- Arming is **per-session**; the CLI resolves the session via `last_session`
+  (written by the UserPromptSubmit hook from the same payload `session_id` the
+  Stop hook uses), so a slash command run right after submitting the prompt
+  targets the right session. `last_session` **must** win over `CLAUDE_SESSION_ID`
+  / `JARVIS_SESSION_ID`: in the Claude Code CLI those env vars are a different id
+  namespace than the hook payload `session_id`, so trusting them first armed a
+  session the Stop hook never receives — the reply showed 🔊 but nothing played
+  (works in Desktop only because there the env id happens to match).
 - The `🔊` marker must start a line and be the **last** such line; otherwise the
   whole reply is spoken (truncated at `max_chars`).
 - Linux needs `libportaudio2` for `sounddevice` (installer warns if missing).
