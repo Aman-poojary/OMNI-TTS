@@ -88,7 +88,11 @@ def register(repo_dir):
 
     os.makedirs(SKILLS_DIR, exist_ok=True)
     for name in SKILLS:
-        src = os.path.join(repo_dir, "skills", name, "SKILL.md")
+        # SKILL.claude.md uses Claude-only features (!`cmd` preprocessing,
+        # disable-model-invocation); plain SKILL.md is the portable fallback.
+        src = os.path.join(repo_dir, "skills", name, "SKILL.claude.md")
+        if not os.path.exists(src):
+            src = os.path.join(repo_dir, "skills", name, "SKILL.md")
         if not os.path.exists(src):
             continue
         dst = os.path.join(SKILLS_DIR, name)

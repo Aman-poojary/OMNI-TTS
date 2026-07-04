@@ -6,7 +6,7 @@ so nothing is OS-specific. Session resolution order: --session flag, then
 CLAUDE_SESSION_ID / JARVIS_SESSION_ID env, then the last active session recorded
 by the UserPromptSubmit hook.
 
-    jarvis arm | arm-once | disarm
+    jarvis arm | arm-once | disarm   (aliases: on / once / off)
     jarvis stop [--all] | warmup
     jarvis config [KEY VALUE]
     jarvis status
@@ -163,11 +163,11 @@ def main():
         rest = [a for j, a in enumerate(argv[1:], start=1) if j not in (i, i + 1)]
     sid = resolve_session(argv)
 
-    if cmd == "arm":
+    if cmd in ("arm", "on"):
         return cmd_arm(sid)
-    if cmd == "arm-once":
+    if cmd in ("arm-once", "once"):
         return cmd_arm(sid, once=True)
-    if cmd == "disarm":
+    if cmd in ("disarm", "off"):
         return cmd_disarm(sid)
     if cmd == "stop":
         return cmd_stop(sid, everything="--all" in rest)
