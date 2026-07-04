@@ -54,8 +54,13 @@ def ensure_daemon():
     return False
 
 
-def speak_daemon(text, cfg):
-    payload = {"text": text, "voice": cfg["voice"], "speed": cfg["speed"]}
+def speak_daemon(text, cfg, session_id=None):
+    payload = {
+        "text": text,
+        "voice": cfg["voice"],
+        "speed": cfg["speed"],
+        "session_id": session_id or "",
+    }
     req = urllib.request.Request(
         f"{BASE}/speak",
         data=json.dumps(payload).encode("utf-8"),
@@ -80,7 +85,7 @@ def main():
     engine = str(cfg["engine"]).lower()
     try:
         if engine != "say" and ensure_daemon():
-            speak_daemon(text, cfg)
+            speak_daemon(text, cfg, session_id)
             return
     except Exception:
         pass

@@ -7,12 +7,14 @@ CLAUDE_SESSION_ID / JARVIS_SESSION_ID env, then the last active session recorded
 by the UserPromptSubmit hook.
 
     jarvis arm | arm-once | disarm
-    jarvis stop | warmup
+    jarvis stop [--all] | warmup
     jarvis config [KEY VALUE]
     jarvis status
     jarvis say TEXT
+    jarvis ui
 """
 
+import json
 import os
 import sys
 import urllib.request
@@ -38,10 +40,11 @@ def resolve_session(argv):
     )
 
 
-def _post(path):
+def _post(path, timeout=5, body=None):
     try:
+        data = json.dumps(body).encode("utf-8") if body is not None else b""
         urllib.request.urlopen(
-            urllib.request.Request(f"{tts_client.BASE}{path}", data=b""), timeout=5
+            urllib.request.Request(f"{tts_client.BASE}{path}", data=data), timeout=timeout
         )
         return True
     except Exception:
@@ -54,7 +57,7 @@ def cmd_arm(sid, once=False):
         return 1
     (armed.arm_once if once else armed.arm)(sid)
     if tts_client.ensure_daemon():
-        _post("/warmup")
+        _post("/warmup", timeout=90)
     print(f"armed{' (one-shot)' if once else ''}: session {sid}")
     return 0
 
@@ -63,21 +66,39 @@ def cmd_disarm(sid):
     if sid:
         armed.disarm(sid)
     if tts_client.health():
-        _post("/stop")
+        # scoped: silencing one session must not cut another session's audio
+        _post("/stop", body={"session_id": sid} if sid else None)
     print(f"disarmed: session {sid or '(none)'}")
     return 0
 
 
-def cmd_stop(_sid):
-    ok = _post("/stop") if tts_client.health() else False
-    print("stopped" if ok else "daemon not running")
+def cmd_stop(sid, everything=False):
+    body = {"session_id": sid} if sid and not everything else None
+    ok = _post("/stop", body=body) if tts_client.health() else False
+    scope = "all sessions" if body is None else f"session {sid}"
+    print(f"stopped ({scope})" if ok else "daemon not running")
+    return 0
+
+
+def cmd_ui(_sid):
+    url = f"{tts_client.BASE}/ui"
+    if not tts_client.ensure_daemon():
+        print("daemon unavailable (venv/model missing?)", file=sys.stderr)
+        return 1
+    print(url)
+    try:
+        import webbrowser
+
+        webbrowser.open(url)
+    except Exception:
+        pass
     return 0
 
 
 def cmd_warmup(_sid):
     if tts_client.ensure_daemon():
-        _post("/warmup")
-        print("warming daemon")
+        _post("/warmup", timeout=90)
+        print("daemon warm")
         return 0
     print("daemon unavailable (venv/model missing?)", file=sys.stderr)
     return 1
@@ -149,9 +170,11 @@ def main():
     if cmd == "disarm":
         return cmd_disarm(sid)
     if cmd == "stop":
-        return cmd_stop(sid)
+        return cmd_stop(sid, everything="--all" in rest)
     if cmd == "warmup":
         return cmd_warmup(sid)
+    if cmd == "ui":
+        return cmd_ui(sid)
     if cmd == "config":
         return cmd_config(sid, rest[0] if rest else None, rest[1] if len(rest) > 1 else None)
     if cmd == "status":
