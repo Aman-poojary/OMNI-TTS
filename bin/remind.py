@@ -16,7 +16,7 @@ import sys
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from armed import is_armed, refresh  # noqa: E402
+from armed import claim_pending, is_armed, refresh  # noqa: E402
 from config import write_last_session  # noqa: E402
 from payload import get_session_id, read_stdin_json  # noqa: E402
 
@@ -40,6 +40,14 @@ def main():
     data = read_stdin_json()
     session_id = get_session_id(data)
     write_last_session(session_id)  # let the CLI resolve "this session"
+    # A /jarvis-* skill's preprocessing ran a beat ago without knowing this
+    # session's id and left a pending intent; this hook fires on that same
+    # prompt WITH the id, so bind the intent here. Gated on the prompt
+    # mentioning jarvis so an unrelated concurrent session never claims it.
+    prompt = f'{data.get("prompt") or ""} {data.get("slash_command") or ""}'.strip()
+    if not prompt or "jarvis" in prompt.lower():
+        if claim_pending(session_id) == "off":
+            barge_in(session_id)  # /jarvis-off also means "stop talking now"
     if is_armed(session_id):
         refresh(session_id)     # active session: keep the age sweep away
         barge_in(session_id)    # new prompt supersedes this session's speech

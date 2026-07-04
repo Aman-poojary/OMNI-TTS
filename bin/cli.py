@@ -3,8 +3,12 @@
 
 The portability seam: skills call these subcommands instead of embedding shell,
 so nothing is OS-specific. Session resolution order: --session flag, then
-CLAUDE_SESSION_ID / JARVIS_SESSION_ID env, then the last active session recorded
-by the UserPromptSubmit hook.
+CLAUDE_CODE_SESSION_ID / CLAUDE_SESSION_ID / JARVIS_SESSION_ID env, then the
+last active session recorded by the UserPromptSubmit hook. The last_session
+fallback is UNTRUSTED for arm/disarm: skill preprocessing runs before the hook
+records the new session, so on a session's first prompt it names the previous
+session — those commands defer to a pending intent claimed by the next hook
+that knows the real id (see armed.set_pending/claim_pending).
 
     jarvis arm | arm-once | disarm   (aliases: on / once / off)
     jarvis stop [--all] | warmup
@@ -29,15 +33,20 @@ _VALID_ENGINES = {"kokoro", "say"}
 
 
 def resolve_session(argv):
+    """Returns (session_id, trusted). trusted=False means the id is only the
+    last_session fallback, which lags one prompt behind in a brand-new session."""
     if "--session" in argv:
         i = argv.index("--session")
         if i + 1 < len(argv):
-            return argv[i + 1]
-    return (
-        os.environ.get("CLAUDE_SESSION_ID")
+            return argv[i + 1], True
+    sid = (
+        os.environ.get("CLAUDE_CODE_SESSION_ID")
+        or os.environ.get("CLAUDE_SESSION_ID")
         or os.environ.get("JARVIS_SESSION_ID")
-        or config.read_last_session()
     )
+    if sid:
+        return sid, True
+    return config.read_last_session(), False
 
 
 def _post(path, timeout=5, body=None):
@@ -51,24 +60,34 @@ def _post(path, timeout=5, body=None):
         return False
 
 
-def cmd_arm(sid, once=False):
-    if not sid:
-        print("no active session found; open a session and try again", file=sys.stderr)
-        return 1
-    (armed.arm_once if once else armed.arm)(sid)
+def cmd_arm(sid, trusted, once=False):
+    mode = "once" if once else "on"
+    if sid and trusted:
+        (armed.arm_once if once else armed.arm)(sid)
+    else:
+        # last_session may name the PREVIOUS session (or nothing) when this
+        # runs from skill preprocessing on a new session's first prompt; leave
+        # an intent for this prompt's own hooks to bind to the real session.
+        armed.set_pending(mode)
     if tts_client.ensure_daemon():
         _post("/warmup", timeout=90)
-    print(f"armed{' (one-shot)' if once else ''}: session {sid}")
+    if sid and trusted:
+        print(f"armed{' (one-shot)' if once else ''}: session {sid}")
+    else:
+        print(f"arm ({mode}) queued: binds to the invoking session on this prompt")
     return 0
 
 
-def cmd_disarm(sid):
-    if sid:
+def cmd_disarm(sid, trusted):
+    if sid and trusted:
         armed.disarm(sid)
-    if tts_client.health():
-        # scoped: silencing one session must not cut another session's audio
-        _post("/stop", body={"session_id": sid} if sid else None)
-    print(f"disarmed: session {sid or '(none)'}")
+        if tts_client.health():
+            # scoped: silencing one session must not cut another session's audio
+            _post("/stop", body={"session_id": sid})
+        print(f"disarmed: session {sid}")
+    else:
+        armed.set_pending("off")  # claimed (with a scoped stop) by remind.py
+        print("disarm queued: binds to the invoking session on this prompt")
     return 0
 
 
@@ -161,14 +180,14 @@ def main():
     if "--session" in argv:
         i = argv.index("--session")
         rest = [a for j, a in enumerate(argv[1:], start=1) if j not in (i, i + 1)]
-    sid = resolve_session(argv)
+    sid, trusted = resolve_session(argv)
 
     if cmd in ("arm", "on"):
-        return cmd_arm(sid)
+        return cmd_arm(sid, trusted)
     if cmd in ("arm-once", "once"):
-        return cmd_arm(sid, once=True)
+        return cmd_arm(sid, trusted, once=True)
     if cmd in ("disarm", "off"):
-        return cmd_disarm(sid)
+        return cmd_disarm(sid, trusted)
     if cmd == "stop":
         return cmd_stop(sid, everything="--all" in rest)
     if cmd == "warmup":

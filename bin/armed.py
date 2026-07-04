@@ -5,11 +5,25 @@ Two flag files per session id:
     <sid>.once   one-shot    (/jarvis; consumed after one reply)
 
 Arming is per-session so one session speaking never affects another.
+
+There is also one non-session file, ``.pending``: an arm/disarm intent written
+by a context that cannot know the real session id (skill preprocessing runs
+before the UserPromptSubmit hook records ``last_session``, so on a session's
+first prompt that fallback still names the PREVIOUS session). The next hook
+that receives the true session id (remind.py, or speak.py as backstop) claims
+the intent and applies it to its own session.
 """
 
 import os
+import time
 
 from config import ARMED_DIR, ensure_dirs, sanitize_session_id
+
+PENDING_MAX_AGE_SECS = 120
+
+
+def _pending():
+    return os.path.join(ARMED_DIR, ".pending")
 
 
 def _persistent(session_id):
@@ -58,6 +72,33 @@ def refresh(session_id):
             os.utime(path, now)
         except OSError:
             pass
+
+
+def set_pending(mode):
+    """Record an arm/disarm intent ("on" | "once" | "off") to be bound to the
+    next session whose hook claims it."""
+    ensure_dirs()
+    with open(_pending(), "w") as f:
+        f.write(mode)
+
+
+def claim_pending(session_id):
+    """Bind a fresh pending intent to this session and apply it. Returns the
+    mode applied, or None if there was nothing (fresh) to claim."""
+    if not session_id:
+        return None
+    path = _pending()
+    try:
+        stale = time.time() - os.path.getmtime(path) > PENDING_MAX_AGE_SECS
+        with open(path) as f:
+            mode = f.read().strip()
+        os.remove(path)
+    except OSError:
+        return None
+    if stale or mode not in ("on", "once", "off"):
+        return None
+    {"on": arm, "once": arm_once, "off": disarm}[mode](session_id)
+    return mode
 
 
 def is_armed(session_id):

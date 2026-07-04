@@ -15,7 +15,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from armed import should_speak  # noqa: E402
+from armed import claim_pending, should_speak  # noqa: E402
 from config import JARVIS_HOME, load_config  # noqa: E402
 from payload import get_session_id, last_assistant_text, read_stdin_json  # noqa: E402
 from textproc import clean_for_speech, pick_speech_source  # noqa: E402
@@ -34,6 +34,10 @@ def debug_log(msg):
 def main():
     data = read_stdin_json()
     session_id = get_session_id(data)
+    # Backstop for providers whose prompt hook didn't fire for the arming
+    # command: the turn's Stop still knows the true session id, so a pending
+    # arm/disarm intent left by skill preprocessing binds here instead.
+    claim_pending(session_id)
     if not should_speak(session_id):
         sys.exit(0)
 

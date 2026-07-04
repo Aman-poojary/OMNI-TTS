@@ -41,7 +41,7 @@ session-end). Hook commands are bare `python3 <entry>` calls, no shell logic.
 | `statusline.py` | stdlib | Claude `statusLine` segment: armed state, daemon warm/speaking, session-state presence. |
 | `speak.py` | stdlib | `Stop` hook orchestrator. Speaks only if this session is armed; detaches the client; always exits 0. |
 | `tts_client.py` | stdlib | Ensures the daemon (cross-platform venv), POSTs `{text,voice,speed}`, else per-OS fallback. |
-| `tts_daemon.py` | **venv** | Stateless HTTP daemon on `127.0.0.1:7739`. Streams synth + playback; `/health`, `/speak`, `/warmup`, `/stop` (optionally session-scoped), `/status` (JSON), `/ui` (debug page). |
+| `tts_daemon.py` | **venv** | Stateless HTTP daemon on `127.0.0.1:7739`. Streams synth + playback; `/health`, `/speak`, `/warmup`, `/stop` (optionally session-scoped), `/disarm` (session-scoped stop + flag removal), `/status` (JSON), `/ui` (debug page). |
 | `audio.py` | venv | `sounddevice` playback + device-rate resampling. |
 | `fallback.py` | stdlib | Per-OS system TTS (say / SAPI / espeak). |
 | `cli.py` | stdlib | The `jarvis` CLI skills call (`arm`/`disarm`/`stop`/`config`/…). |
@@ -54,8 +54,16 @@ session-end). Hook commands are bare `python3 <entry>` calls, no shell logic.
 `~/.jarvis/armed/<session_id>` (persistent, `/jarvis-on`) and `<session_id>.once`
 (one-shot, `/jarvis`, consumed by `speak.py` after one reply). Skills call the
 `jarvis` CLI, which resolves "this session" from `--session`, then
-`CLAUDE_SESSION_ID`/`JARVIS_SESSION_ID`, then `last_session` (written by
-`remind.py` when the prompt was submitted). Arming pings `/warmup`.
+`CLAUDE_CODE_SESSION_ID`/`CLAUDE_SESSION_ID`/`JARVIS_SESSION_ID`, then
+`last_session` (written by `remind.py` when the prompt was submitted). Arming
+pings `/warmup`.
+
+The `last_session` fallback is untrusted for arm/disarm: skill preprocessing
+runs **before** `remind.py` records the new session, so on a session's first
+prompt it still names the previous session. In that case the CLI writes an
+intent to `~/.jarvis/armed/.pending` instead; `remind.py` (same prompt, real
+session id, gated on the prompt mentioning "jarvis") or `speak.py` (backstop)
+claims it and arms/disarms its own session.
 
 ## End-to-end flow
 
