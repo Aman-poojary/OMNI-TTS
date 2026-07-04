@@ -49,6 +49,17 @@ def disarm(session_id):
     _rm(_once(session_id))
 
 
+def refresh(session_id):
+    """Touch this session's flag mtimes so the age sweep never disarms a
+    session that is still actively prompting."""
+    now = None
+    for path in (_persistent(session_id), _once(session_id)):
+        try:
+            os.utime(path, now)
+        except OSError:
+            pass
+
+
 def is_armed(session_id):
     """Non-consuming check — used by the UserPromptSubmit hook."""
     if not session_id:

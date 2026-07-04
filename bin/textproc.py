@@ -15,17 +15,19 @@ def pick_speech_source(text):
     """Return only the part of the reply meant to be spoken.
 
     Preferred: the final paragraph the assistant marks with a 🔊 line-start.
-    Fallback: the whole reply (speak-time truncation caps it at max_chars).
+    Fallback: nothing. Speaking a full technical reply is slow and noisy, so a
+    missing marker should fail closed instead of sending the whole response.
     """
     matches = list(re.finditer(
         r"^\s*🔊\s*(?:voice summary\s*:?\s*)?",
-        text, re.IGNORECASE | re.MULTILINE,
+        text,
+        re.IGNORECASE | re.MULTILINE,
     ))
     if matches:
         rest = text[matches[-1].end():].split("\n\n", 1)[0].strip()
         if rest:
             return rest
-    return text
+    return ""
 
 
 def clean_for_speech(text):

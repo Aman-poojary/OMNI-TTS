@@ -135,10 +135,10 @@ def main():
     warn_portaudio()
     register_providers(args.provider)
 
-    print("\nDone. Restart your provider so the /jarvis* commands appear, then try:")
-    print("  /jarvis-on         # speak every reply (this session)")
-    print("  /jarvis-off        # silence")
-    print("  /jarvis-config     # change voice / speed / engine")
+    print("\nDone. Restart your provider so Jarvis commands refresh, then try:")
+    print("  Claude Code: /jarvis-on, /jarvis-off, /jarvis-config")
+    print("  Codex: $jarvis-on, $jarvis-off, $jarvis-config")
+    print("  Codex slash menu: /prompts:jarvis-on, /prompts:jarvis-off, /prompts:jarvis-config")
 
 
 if __name__ == "__main__":

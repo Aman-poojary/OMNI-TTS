@@ -26,8 +26,8 @@ Per-session state also lives here: `~/.jarvis/sessions/<id>.json` (config
 overrides), `~/.jarvis/armed/<id>` and `<id>.once` (arming), `last_session`
 (CLI session resolution). Adapters register hooks: Claude →
 `~/.claude/settings.json` (`UserPromptSubmit`, `Stop`, `SessionEnd`), Codex →
-`~/.codex/hooks.json` (`UserPromptSubmit`, `Stop` — no session-end). Hook
-commands are bare `python3 <entry>` calls, no shell logic.
+`~/.codex/hooks.json` (`SessionStart`, `UserPromptSubmit`, `Stop` — no
+session-end). Hook commands are bare `python3 <entry>` calls, no shell logic.
 
 ## The scripts (`bin/`)
 
@@ -35,17 +35,19 @@ commands are bare `python3 <entry>` calls, no shell logic.
 |---|---|---|
 | `config.py` | stdlib | Layered config: env > session override > global file > built-in DEFAULTS. Paths for `~/.jarvis/`. Records/reads `last_session`. |
 | `armed.py` | stdlib | Per-session arming flags (persistent + one-shot). |
-| `payload.py` | stdlib | Provider payload shim: `session_id` + last assistant text (Claude transcript, inline Codex fallback). |
+| `payload.py` | stdlib | Provider payload shim: `session_id` + the current reply's text (Claude transcript, inline Codex fallback). Only accepts assistant text written after the newest user prompt and skips sidechain entries — returns `""` until the reply is flushed, so a Stop that races the transcript write never re-speaks the previous reply. |
 | `textproc.py` | stdlib | `pick_speech_source`, `clean_for_speech`, `chunk_text` (small first chunk). |
-| `remind.py` | stdlib | `UserPromptSubmit` hook. Records last session; injects the 🔊 instruction if armed. |
+| `remind.py` | stdlib | `UserPromptSubmit` hook. Records last session; if armed: injects the 🔊 instruction, refreshes flag mtimes (sweep protection), and barge-ins (session-scoped `/stop`). |
+| `statusline.py` | stdlib | Claude `statusLine` segment: armed state, daemon warm/speaking, session-state presence. |
 | `speak.py` | stdlib | `Stop` hook orchestrator. Speaks only if this session is armed; detaches the client; always exits 0. |
 | `tts_client.py` | stdlib | Ensures the daemon (cross-platform venv), POSTs `{text,voice,speed}`, else per-OS fallback. |
-| `tts_daemon.py` | **venv** | Stateless HTTP daemon on `127.0.0.1:7739`. Streams synth + playback; `/health`, `/speak`, `/warmup`, `/stop`. |
+| `tts_daemon.py` | **venv** | Stateless HTTP daemon on `127.0.0.1:7739`. Streams synth + playback; `/health`, `/speak`, `/warmup`, `/stop` (optionally session-scoped), `/status` (JSON), `/ui` (debug page). |
 | `audio.py` | venv | `sounddevice` playback + device-rate resampling. |
 | `fallback.py` | stdlib | Per-OS system TTS (say / SAPI / espeak). |
 | `cli.py` | stdlib | The `jarvis` CLI skills call (`arm`/`disarm`/`stop`/`config`/…). |
 | `cleanup.py` | stdlib | `cleanup_session` + 6-hour `sweep`. |
 | `session_end.py` | stdlib | Claude `SessionEnd` hook → `cleanup_session`. |
+| `session_sweep.py` | stdlib | Codex `SessionStart` hook → age-based `sweep`. |
 
 ## Arming = per-session flag files
 
@@ -62,20 +64,30 @@ commands are bare `python3 <entry>` calls, no shell logic.
    the "write a 🔊 line" instruction.
 3. Assistant replies, ending with `🔊 <spoken answer>`.
 4. `Stop` → `speak.py`: `should_speak(session_id)` (consumes one-shot); read the
-   last assistant text via the payload shim; `pick_speech_source` +
-   `clean_for_speech`; truncate at `max_chars`; spawn `tts_client.py` detached.
+   current reply via the payload shim (tail-read — only the transcript's
+   last 256 KB, so huge Desktop transcripts can't blow the hook timeout), polling
+   up to 6 s because Stop can fire before the provider flushes the reply line;
+   `pick_speech_source` + `clean_for_speech`; truncate at `max_chars`; spawn
+   `tts_client.py` detached.
 5. `tts_client.py` — load the session's config, ensure the daemon, POST
    `{text, voice, speed}`; else per-OS fallback.
 6. `tts_daemon.py` — enqueue; the FIFO worker streams synth→playback.
 
 ## Audio generation (`tts_daemon.py`)
 
-Stateless: voice/speed ride in each `/speak`, so one loaded model serves all
-sessions' voices. `render_and_play` runs a producer/consumer: a synth thread
-renders each `chunk_text` chunk (first chunk is one sentence) and resamples it to
-the device rate; the worker writes chunks to a `sounddevice` OutputStream as they
-arrive. First audio lands after one sentence, not the whole reply. `/stop` drains
-the queue, sets an interrupt Event checked between chunks, and aborts the stream.
+Stateless: voice/speed/session ride in each `/speak`, so one loaded model serves
+all sessions' voices. Jobs are tagged with their session id and wait in a
+scannable deque; one FIFO worker plays them in order across sessions, and a new
+`/speak` for a session **supersedes** that session's still-queued jobs so
+back-to-back replies never pile up. `render_and_play` runs a producer/consumer:
+a synth thread renders each `chunk_text` chunk (first chunk is one sentence)
+and resamples it to the device rate; the worker writes chunks to a
+`sounddevice` OutputStream as they arrive. First audio lands after one
+sentence, not the whole reply. Every job carries its own abort Event: `/stop`
+with `{"session_id"}` kills only that session's queued + playing jobs (used by
+`remind.py` barge-in and `jarvis disarm`); an empty `/stop` kills everything.
+The daemon also keeps a rolling event feed (queued/superseded/play/stop/errors)
+exposed at `/status` and rendered by the `/ui` debug page.
 
 ## Model & lifecycle
 
@@ -94,9 +106,11 @@ the queue, sets an interrupt Event checked between chunks, and aborts the stream
 ## Cleanup
 
 Claude `SessionEnd` → `cleanup_session` removes that session's `armed/` +
-`sessions/` files. The daemon watchdog runs a 6-hour `sweep` as the backstop for
-Codex (no session-end) and crashed sessions. Only `~/.jarvis/` files are ever
-deleted — provider transcripts/history are read-only.
+`sessions/` files. Codex has no `SessionEnd`, so the daemon watchdog and Codex
+`SessionStart` hook run the 6-hour `sweep` backstop for Codex and crashed
+sessions. `remind.py` refreshes an armed session's flag mtimes on every prompt,
+so the sweep never disarms a session that is still actively prompting. Only `~/.jarvis/` files are ever deleted — provider
+transcripts/history are read-only.
 
 ## Gotchas
 

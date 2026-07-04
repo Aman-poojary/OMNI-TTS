@@ -65,6 +65,11 @@ and try:
 /jarvis what does this repo do?
 ```
 
+In Codex, skills are invoked as `$jarvis` or selected from `/skills`. The
+installer also creates deprecated custom-prompt shims, so Codex's slash menu can
+show `/prompts:jarvis`, `/prompts:jarvis-on`, etc. Codex does not expose custom
+skills as plain `/jarvis` commands.
+
 Re-running `install.py` updates scripts and skills in place; the venv and model
 downloads are skipped if present. Your existing config is kept.
 
@@ -72,11 +77,27 @@ downloads are skipped if present. Your existing config is kept.
 
 | Command | What it does |
 |---|---|
-| `/jarvis <question>` | Answer one question aloud (one-shot, this session) |
-| `/jarvis-on` | Speak every reply in this session until turned off |
-| `/jarvis-off` | Silence this session and stop any audio playing |
-| `/jarvis-stop` | Cut off the current spoken reply, staying armed |
-| `/jarvis-config` | Show/change per-session voice settings |
+| `/jarvis <question>` (Claude) / `$jarvis <question>` or `/prompts:jarvis <question>` (Codex) | Answer one question aloud (one-shot, this session) |
+| `/jarvis-on` (Claude) / `$jarvis-on` or `/prompts:jarvis-on` (Codex) | Speak every reply in this session until turned off |
+| `/jarvis-off` (Claude) / `$jarvis-off` or `/prompts:jarvis-off` (Codex) | Silence this session and stop any audio playing |
+| `/jarvis-stop` (Claude) / `$jarvis-stop` or `/prompts:jarvis-stop` (Codex) | Cut off the current spoken reply, staying armed |
+| `/jarvis-config` (Claude) / `$jarvis-config` or `/prompts:jarvis-config` (Codex) | Show/change per-session voice settings |
+
+## Status line + debug UI
+
+The Claude Code status line can show JARVIS state per session:
+`🔊 JARVIS on ⚡` (armed, daemon warm, `▶` appended while speaking) or
+`🔇 JARVIS off · session –` (disarmed; `session –` means this session's state
+files were cleaned or swept). The installer registers
+`~/.jarvis/bin/statusline.py` as the `statusLine` command when none exists; if
+you already have one, pipe the same stdin JSON through the script and append
+its output as an extra segment.
+
+For debugging, the daemon serves a live dashboard at
+`http://127.0.0.1:7739/ui` (`jarvis ui` opens it): model/queue state, what is
+being spoken for which session, session arming files on disk, a rolling event
+feed (queued / superseded / play / stop / errors), and the hook + daemon log
+tails. `GET /status` returns the same data as JSON.
 
 ## Configuration
 
@@ -107,8 +128,13 @@ built-in defaults**. Edits apply on the next reply — no restart.
 | `~/.jarvis/config.json` | Global defaults |
 | `~/.jarvis/sessions/<id>.json` | Per-session config overrides |
 | `~/.jarvis/armed/<id>` | Per-session arming flags |
-| `~/.claude/skills/jarvis*/` · `~/.codex/skills/jarvis*/` | The slash commands |
+| `~/.claude/skills/jarvis*/` · `~/.agents/skills/jarvis*/` | The Jarvis skills |
+| `~/.codex/prompts/jarvis*.md` | Codex slash-menu shims (`/prompts:jarvis*`) |
 | `~/.claude/settings.json` · `~/.codex/hooks.json` | Hook entries (merged in) |
+
+Claude Code gets an exact `SessionEnd` cleanup hook. Codex does not expose a
+session-end event, so JARVIS registers a `SessionStart` stale-file sweep and the
+daemon also sweeps stale session files while warm.
 
 ## Uninstall
 

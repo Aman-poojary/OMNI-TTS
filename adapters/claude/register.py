@@ -32,6 +32,26 @@ def _command(entry):
     return f'{PY} "{os.path.join(BIN, entry)}"'
 
 
+def _entry_has_jarvis(entry):
+    return any("jarvis" in h.get("command", "") for h in entry.get("hooks", []))
+
+
+def _register_statusline(settings):
+    """Point statusLine at the JARVIS segment when none is configured. An
+    existing non-jarvis statusLine is left alone — append the segment there
+    instead (see README)."""
+    cmd = _command("statusline.py")
+    existing = settings.get("statusLine") or {}
+    if not existing.get("command"):
+        settings["statusLine"] = {"type": "command", "command": cmd}
+        print("    statusLine: registered")
+    elif "jarvis" in existing["command"]:
+        print("    statusLine: already registered")
+    else:
+        print("    statusLine: existing non-jarvis command kept; append")
+        print(f'      the segment yourself: echo "$input" | {cmd}')
+
+
 def _load_settings():
     if os.path.exists(SETTINGS):
         with open(SETTINGS, encoding="utf-8") as f:
@@ -51,14 +71,19 @@ def register(repo_dir):
     hooks = settings.setdefault("hooks", {})
     for event, (entry, timeout) in HOOKS.items():
         entries = hooks.setdefault(event, [])
-        if any(
-            "jarvis" in h.get("command", "")
-            for e in entries for h in e.get("hooks", [])
-        ):
+        new = {"hooks": [{"type": "command", "command": _command(entry), "timeout": timeout}]}
+        stale = [e for e in entries if _entry_has_jarvis(e) and e != new]
+        if stale:
+            # replace outdated jarvis registrations (e.g. old install paths)
+            hooks[event] = entries = [e for e in entries if not _entry_has_jarvis(e)]
+            entries.append(new)
+            print(f"    {event}: replaced stale registration")
+        elif any(_entry_has_jarvis(e) for e in entries):
             print(f"    {event}: already registered")
-            continue
-        entries.append({"hooks": [{"type": "command", "command": _command(entry), "timeout": timeout}]})
-        print(f"    {event}: registered")
+        else:
+            entries.append(new)
+            print(f"    {event}: registered")
+    _register_statusline(settings)
     _save_settings(settings)
 
     os.makedirs(SKILLS_DIR, exist_ok=True)
@@ -80,14 +105,13 @@ def unregister():
             entries = hooks.get(event)
             if not entries:
                 continue
-            kept = [
-                e for e in entries
-                if not any("jarvis" in h.get("command", "") for h in e.get("hooks", []))
-            ]
+            kept = [e for e in entries if not _entry_has_jarvis(e)]
             if kept:
                 hooks[event] = kept
             else:
                 hooks.pop(event, None)
+        if "jarvis" in (settings.get("statusLine") or {}).get("command", ""):
+            settings.pop("statusLine", None)
         _save_settings(settings)
     for name in SKILLS:
         shutil.rmtree(os.path.join(SKILLS_DIR, name), ignore_errors=True)
