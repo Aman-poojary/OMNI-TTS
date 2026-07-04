@@ -12,12 +12,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from armed import is_armed  # noqa: E402
+from config import write_last_session  # noqa: E402
 from payload import get_session_id, read_stdin_json  # noqa: E402
 
 
 def main():
     data = read_stdin_json()
     session_id = get_session_id(data)
+    write_last_session(session_id)  # let the CLI resolve "this session"
     if is_armed(session_id):
         print(json.dumps({
             "hookSpecificOutput": {

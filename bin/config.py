@@ -19,6 +19,10 @@ MODELS_DIR = os.path.join(JARVIS_HOME, "models")
 SESSIONS_DIR = os.path.join(JARVIS_HOME, "sessions")
 ARMED_DIR = os.path.join(JARVIS_HOME, "armed")
 CONFIG_PATH = os.path.join(JARVIS_HOME, "config.json")
+# The UserPromptSubmit hook records the most recently active session here so the
+# CLI (invoked from a slash-command shell, which has no session id) can resolve
+# "this session" as the one that just submitted a prompt.
+LAST_SESSION_PATH = os.path.join(JARVIS_HOME, "last_session")
 
 DEFAULTS = {
     "engine": "kokoro",      # "kokoro" (daemon) or "say" (system fallback)
@@ -87,6 +91,25 @@ def load_config(session_id=None):
         if val is not None and val != "":
             cfg[key] = val
     return _cast(cfg)
+
+
+def write_last_session(session_id):
+    if not session_id:
+        return
+    try:
+        ensure_dirs()
+        with open(LAST_SESSION_PATH, "w", encoding="utf-8") as f:
+            f.write(str(session_id))
+    except OSError:
+        pass
+
+
+def read_last_session():
+    try:
+        with open(LAST_SESSION_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 
 def set_session_value(session_id, key, value):
