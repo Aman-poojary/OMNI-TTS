@@ -1,124 +1,109 @@
-# CONTEXT — claude-jarvis
+# CONTEXT — jarvis
 
 > Orientation doc for humans and agents. Read this before diving into files.
-> Describes the **current implementation**. `plan.md` is a *future* redesign that
-> is NOT yet built — do not treat it as how the code works today.
+> Describes the **current implementation** (the cross-platform, provider-neutral
+> redesign built from [plan.md](plan.md) / [PRD.md](PRD.md)).
 
 ## What this is
 
-A JARVIS-style voice layer for **Claude Code on macOS**. When "armed", the
-assistant's reply is spoken aloud in a British-male TTS voice (Kokoro-82M),
-Iron-Man-style. Off by default; zero effect on normal sessions.
+A JARVIS-style voice layer for **Claude Code and Codex**, on **macOS, Windows,
+and Linux**. When a session is "armed", the assistant's reply is spoken aloud by
+Kokoro-82M running locally. Off by default; zero effect on unarmed sessions.
 
-**macOS-only today**: playback uses `afplay`, fallback uses `say`, and
-`install.sh` hard-exits on non-Darwin.
+## Install layout (`~/.jarvis/`)
 
-## Install layout
+`install.py` builds a provider-neutral root and points providers at it:
 
-`install.sh` copies things out of this repo into the user's Claude config:
+| Repo source | Installed to |
+|---|---|
+| `bin/*.py` | `~/.jarvis/bin/` |
+| `config.default.json` | `~/.jarvis/config.json` (if absent) |
+| model files | `~/.jarvis/models/` (downloaded, ~340 MB) |
+| Python venv | `~/.jarvis/venv/` (uv if present, else venv+pip) |
+| `skills/*/SKILL.md` | `~/.claude/skills/<name>/` and/or `~/.codex/skills/<name>/` |
 
-| Repo source        | Installed to                     |
-|--------------------|----------------------------------|
-| `bin/*.py`         | `~/.claude/jarvis/bin/`          |
-| `skills/*/SKILL.md`| `~/.claude/skills/<name>/`       |
-| `config.default.json` | `~/.claude/jarvis/config.json` (if absent) |
-| model files        | `~/.claude/jarvis/models/` (downloaded, ~340 MB) |
-| Python venv        | `~/.claude/jarvis/venv/` (uv, py3.11) |
-
-Two hooks are registered in `~/.claude/settings.json`, both guarded with
-`[ -f "$f" ] && python3 "$f" || true` so a missing script can never block prompts:
-- `UserPromptSubmit` → `bin/remind.py`
-- `Stop` → `bin/speak.py`
+Per-session state also lives here: `~/.jarvis/sessions/<id>.json` (config
+overrides), `~/.jarvis/armed/<id>` and `<id>.once` (arming), `last_session`
+(CLI session resolution). Adapters register hooks: Claude →
+`~/.claude/settings.json` (`UserPromptSubmit`, `Stop`, `SessionEnd`), Codex →
+`~/.codex/hooks.json` (`UserPromptSubmit`, `Stop` — no session-end). Hook
+commands are bare `python3 <entry>` calls, no shell logic.
 
 ## The scripts (`bin/`)
 
 | File | Runtime | Role |
-|------|---------|------|
-| `remind.py` | any python3 (stdlib) | `UserPromptSubmit` hook. If armed, injects ~600-char (~130-token) `additionalContext` telling Claude to end its reply with a `🔊`-prefixed JARVIS-voice paragraph. Silent when disarmed. |
-| `speak.py` | any python3 (stdlib) | `Stop` hook. The orchestrator — see flow below. Detaches the speaker and always exits 0 (never blocks Claude). |
-| `tts-client.py` | any python3 (stdlib) | Ensures the daemon is up (starts it from the venv if needed, 60s health poll), POSTs `{"text":...}` to `/speak`. Falls back to macOS `say` if daemon unreachable. |
-| `tts-daemon.py` | **venv python** (needs kokoro-onnx, soundfile) | Long-lived HTTP server on `127.0.0.1:7739`. Holds the warm model, generates + plays audio via a single FIFO worker thread. |
-| `jarvis_config.py` | shared | Loads `config.json` over built-in `DEFAULTS`, re-read on every reply. |
+|---|---|---|
+| `config.py` | stdlib | Layered config: env > session override > global file > built-in DEFAULTS. Paths for `~/.jarvis/`. Records/reads `last_session`. |
+| `armed.py` | stdlib | Per-session arming flags (persistent + one-shot). |
+| `payload.py` | stdlib | Provider payload shim: `session_id` + last assistant text (Claude transcript, inline Codex fallback). |
+| `textproc.py` | stdlib | `pick_speech_source`, `clean_for_speech`, `chunk_text` (small first chunk). |
+| `remind.py` | stdlib | `UserPromptSubmit` hook. Records last session; injects the 🔊 instruction if armed. |
+| `speak.py` | stdlib | `Stop` hook orchestrator. Speaks only if this session is armed; detaches the client; always exits 0. |
+| `tts_client.py` | stdlib | Ensures the daemon (cross-platform venv), POSTs `{text,voice,speed}`, else per-OS fallback. |
+| `tts_daemon.py` | **venv** | Stateless HTTP daemon on `127.0.0.1:7739`. Streams synth + playback; `/health`, `/speak`, `/warmup`, `/stop`. |
+| `audio.py` | venv | `sounddevice` playback + device-rate resampling. |
+| `fallback.py` | stdlib | Per-OS system TTS (say / SAPI / espeak). |
+| `cli.py` | stdlib | The `jarvis` CLI skills call (`arm`/`disarm`/`stop`/`config`/…). |
+| `cleanup.py` | stdlib | `cleanup_session` + 6-hour `sweep`. |
+| `session_end.py` | stdlib | Claude `SessionEnd` hook → `cleanup_session`. |
 
-## Arming = flag files
+## Arming = per-session flag files
 
-Arming is **global** (not per-session), via files in `~/.claude/jarvis/`:
-- `speak_on`   — persistent: speak every reply (`/jarvis-on`; removed by `/jarvis-off`).
-- `speak_once` — one-shot: speak the next reply, then `speak.py` deletes it (`/jarvis`).
-
-The skills are thin wrappers: `/jarvis-on` = `touch speak_on`, `/jarvis-off` =
-`rm -f speak_on speak_once`, `/jarvis` = `touch speak_once`. **No process starts
-when you arm** — the daemon launches lazily on the first spoken reply.
+`~/.jarvis/armed/<session_id>` (persistent, `/jarvis-on`) and `<session_id>.once`
+(one-shot, `/jarvis`, consumed by `speak.py` after one reply). Skills call the
+`jarvis` CLI, which resolves "this session" from `--session`, then
+`CLAUDE_SESSION_ID`/`JARVIS_SESSION_ID`, then `last_session` (written by
+`remind.py` when the prompt was submitted). Arming pings `/warmup`.
 
 ## End-to-end flow
 
-1. `/jarvis-on` → `touch ~/.claude/jarvis/speak_on`.
-2. You send a message → `remind.py` sees the flag, injects the "write a 🔊 line" instruction.
-3. Claude replies, ending with `🔊 <spoken answer>`.
-4. Reply ends → `Stop` hook runs `speak.py`:
-   - `armed()` — check flags (consume `speak_once`); exit if disarmed.
-   - Read `transcript_path` from stdin JSON; `get_last_assistant_text()` parses the
-     JSONL and returns the **last** assistant message's text.
-   - `pick_speech_source()` — take the paragraph after the **last** line starting
-     with `🔊`; if no marker, fall back to the whole reply.
-   - `clean_for_speech()` — strip code/markdown/URLs/emoji, dashes→commas, arrows→"to".
-   - Truncate at `max_chars` (default 1200) → append "Response truncated, sir."
-   - Spawn `tts-client.py` **detached**; exit 0.
-5. `tts-client.py` — ensure daemon (start if needed), POST text, else `say` fallback.
-6. `tts-daemon.py` — `/speak` enqueues text (returns 202); single worker synthesizes + plays.
+1. `/jarvis-on` → `jarvis arm` writes `~/.jarvis/armed/<sid>` and pings `/warmup`.
+2. You send a message → `remind.py` records the session and (if armed) injects
+   the "write a 🔊 line" instruction.
+3. Assistant replies, ending with `🔊 <spoken answer>`.
+4. `Stop` → `speak.py`: `should_speak(session_id)` (consumes one-shot); read the
+   last assistant text via the payload shim; `pick_speech_source` +
+   `clean_for_speech`; truncate at `max_chars`; spawn `tts_client.py` detached.
+5. `tts_client.py` — load the session's config, ensure the daemon, POST
+   `{text, voice, speed}`; else per-OS fallback.
+6. `tts_daemon.py` — enqueue; the FIFO worker streams synth→playback.
 
-## Audio generation
+## Audio generation (`tts_daemon.py`)
 
-In `tts-daemon.py:speak()`:
-- Text is split into ~280-char sentence groups (`chunk_text`, `MAX_CHUNK_CHARS=280`).
-- Each chunk → `model.create()` → an in-memory numpy waveform (NOT a file).
-- **All waveforms are concatenated into ONE array, written to ONE temp WAV, played
-  once with `afplay`, then deleted** in a `finally` block. So: N gen calls → 1 file →
-  1 playback → removed. Chunking keeps each generation short; it does NOT create
-  multiple files. Whole-then-play avoids mid-reply stalls (the cost: no audio starts
-  until the whole summary is synthesized).
+Stateless: voice/speed ride in each `/speak`, so one loaded model serves all
+sessions' voices. `render_and_play` runs a producer/consumer: a synth thread
+renders each `chunk_text` chunk (first chunk is one sentence) and resamples it to
+the device rate; the worker writes chunks to a `sounddevice` OutputStream as they
+arrive. First audio lands after one sentence, not the whole reply. `/stop` drains
+the queue, sets an interrupt Event checked between chunks, and aborts the stream.
 
-## Model & memory lifecycle
+## Model & lifecycle
 
-- Model: Kokoro-82M ONNX. Files: `kokoro-v1.0.onnx` (~310 MB) + `voices-v1.0.bin`
-  (~26 MB) in `~/.claude/jarvis/models/`. One model serves all voices (voices are
-  embeddings in the .bin).
-- **Loaded lazily on the first `/speak`** (not at daemon start, not at arm time).
-  First spoken reply has a few-seconds delay; then it stays warm → instant.
-- **~1 GB RSS while warm** is expected: ONNX weights in memory + onnxruntime CPU
-  arenas/thread pools + numpy + soundfile + interpreter — not the on-disk size.
-- **Idle self-exit**: watchdog thread; if queue empty and no request for
-  `JARVIS_TTS_IDLE_EXIT` (default 1800s = 30 min), `os._exit(0)` frees the RAM.
-- `install.sh` kills whatever holds port 7739 on reinstall so new code takes effect.
-- `/jarvis-off` only removes flags — it does NOT kill the daemon (it idles out).
+- Kokoro-82M ONNX (`kokoro-v1.0.onnx` + `voices-v1.0.bin` in `~/.jarvis/models/`).
+- Warmed on a background thread at daemon boot; `/warmup` re-triggers at arm time.
+- `OMP_NUM_THREADS` set to the core count before load (`JARVIS_TTS_THREADS`
+  overrides) for faster CPU synthesis.
+- ~1 GB RSS while warm. Idle self-exit after `JARVIS_TTS_IDLE_EXIT` (1800s).
 
-## Config (`~/.claude/jarvis/config.json`)
+## Config
 
-Defaults in `jarvis_config.py`: `engine` (`kokoro`|`say`), `voice` (`bm_george`),
-`speed` (1.0), `say_voice` (`Daniel`), `max_chars` (1200). Re-read every reply, so
-edits apply without restarting the daemon. Env vars override per-run
-(`JARVIS_ENGINE`, `JARVIS_VOICE`, `JARVIS_KOKORO_VOICE`, `JARVIS_KOKORO_SPEED`,
-`JARVIS_RATE`, `JARVIS_MAX_CHARS`, `JARVIS_TTS_PORT`, `JARVIS_TTS_IDLE_EXIT`).
+`config.load_config(session_id)` merges built-in DEFAULTS ⊕ global
+`~/.jarvis/config.json` ⊕ session override ⊕ env (env wins). Keys: `engine`,
+`voice`, `speed`, `say_voice`, `max_chars`. Re-read every reply.
 
-## Dependencies
+## Cleanup
 
-Installed **only at install time** (never at runtime): a uv-created py3.11 venv with
-`kokoro-onnx`, `soundfile`, `setuptools<81`; model files curl'd from the kokoro-onnx
-GitHub release. Both steps are idempotent (skip if present). The daemon runs under
-the venv; the three hook/client scripts are stdlib-only and run under any `python3`.
-
-## Skills (`skills/`)
-
-`jarvis` (one-shot), `jarvis-on` (persistent), `jarvis-off`, `jarvis-config`. Each is
-a `SKILL.md` with YAML frontmatter (`name`/`description`) and steps that mostly
-touch/remove flag files and instruct writing the `🔊` line.
+Claude `SessionEnd` → `cleanup_session` removes that session's `armed/` +
+`sessions/` files. The daemon watchdog runs a 6-hour `sweep` as the backstop for
+Codex (no session-end) and crashed sessions. Only `~/.jarvis/` files are ever
+deleted — provider transcripts/history are read-only.
 
 ## Gotchas
 
-- macOS-only (afplay/say; installer refuses other OSes).
-- Arming is global, so both concurrent sessions share on/off state.
-- The `🔊` marker must be at the **start of a line** and is the **last** such line;
-  prose mentioning 🔊 inline won't be mistaken for it.
-- If Claude omits the 🔊 line, the whole reply is spoken (truncated at max_chars).
-- `plan.md` = future redesign (`~/.jarvis/`, sounddevice, per-session arming,
-  cross-platform, Codex support). Not implemented — don't cite it as current behavior.
+- Arming is **per-session**; the CLI resolves the session via `last_session`, so
+  a slash command run right after submitting the prompt targets the right session.
+- The `🔊` marker must start a line and be the **last** such line; otherwise the
+  whole reply is spoken (truncated at `max_chars`).
+- Linux needs `libportaudio2` for `sounddevice` (installer warns if missing).
+- Codex's `Stop` payload shape is assumed; verify it feeds `payload.py` (see
+  plan.md "To verify"). Adjust `adapters/codex/register.py` once confirmed.
