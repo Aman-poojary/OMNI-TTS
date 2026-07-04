@@ -5,15 +5,16 @@ description: Turn JARVIS voice replies OFF — disarm the TTS Stop hook so repli
 
 # Turn JARVIS voice OFF
 
-Disarms the TTS Stop hook: removes both flag files so nothing is spoken.
+Disarms the TTS Stop hook for THIS session and stops any audio still playing.
 
 ## Steps
 
-1. Run: `rm -f ~/.claude/jarvis/speak_on ~/.claude/jarvis/speak_once`
-2. Optionally silence any audio that is still playing:
-   `pkill -f afplay 2>/dev/null; pkill -x say 2>/dev/null` — only do this if
-   the user asked to stop mid-speech (e.g. "shut up", "stop talking").
-3. Confirm briefly in text that voice replies are off. Do NOT add a 🔊 line —
+1. Run: `python3 ~/.jarvis/bin/cli.py disarm`
+   (This removes this session's arming flags and tells the daemon to stop any
+   in-progress playback — no more `pkill`.)
+2. Confirm briefly in text that voice replies are off. Do NOT add a 🔊 line —
    the hook is disarmed and nothing will be spoken.
 
-Related: `/jarvis` (one-shot question), `/jarvis-on`, `/jarvis-config`.
+To cut off a long reply WITHOUT turning voice off, use `/jarvis-stop` instead.
+
+Related: `/jarvis` (one-shot), `/jarvis-on`, `/jarvis-config`, `/jarvis-stop`.
