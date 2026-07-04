@@ -44,3 +44,16 @@ def play(audio, rate):
 
     sd.play(audio, samplerate=rate)
     sd.wait()
+
+
+def open_output_stream(rate, channels=1):
+    """Open and start a streaming output for producer/consumer playback.
+
+    Write float32 chunks with ``stream.write(chunk)``; ``stream.abort()`` cuts
+    playback immediately (used by /stop). Caller must close the stream.
+    """
+    import sounddevice as sd
+
+    stream = sd.OutputStream(samplerate=rate, channels=channels, dtype="float32")
+    stream.start()
+    return stream

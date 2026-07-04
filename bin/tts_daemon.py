@@ -43,10 +43,18 @@ def log(msg):
     print(f"[jarvis-ttsd] {msg}", flush=True)
 
 
+def configure_threads():
+    """Tune onnxruntime CPU threads before the model loads. onnxruntime honors
+    OMP_NUM_THREADS; default to the core count instead of the library default."""
+    n = os.environ.get("JARVIS_TTS_THREADS") or str(os.cpu_count() or 1)
+    os.environ.setdefault("OMP_NUM_THREADS", n)
+
+
 def get_model():
     global _model
     with _model_lock:
         if _model is None:
+            configure_threads()
             log("loading Kokoro-82M (ONNX)...")
             from kokoro_onnx import Kokoro
 
@@ -58,22 +66,51 @@ def get_model():
         return _model
 
 
-def render_and_play(text, voice, speed):
-    import numpy as np
+def warmup():
+    """Load the model and warm the ONNX graph with a throwaway utterance."""
+    try:
+        model = get_model()
+        model.create(".", voice=DEFAULTS["voice"], speed=1.0)
+        log("warmup complete")
+    except Exception as e:
+        log(f"warmup failed: {e!r}")
 
+
+def render_and_play(text, voice, speed):
+    """Producer/consumer streaming: synthesize chunk N+1 while chunk N plays, so
+    the first audio lands after one sentence instead of the whole reply."""
     import audio
 
     model = get_model()
-    parts, sample_rate = [], None
-    for chunk in chunk_text(text):
-        samples, sample_rate = model.create(chunk, voice=voice, speed=speed)
-        parts.append(samples)
-    if not parts:
-        return
-    wave = np.concatenate(parts).astype(np.float32)
     dst = audio.device_rate()
-    wave = audio.resample(wave, sample_rate, dst)
-    audio.play(wave, dst)
+    chunks = chunk_text(text)
+    if not chunks:
+        return
+
+    rendered = queue.Queue(maxsize=4)
+
+    def produce():
+        try:
+            for chunk in chunks:
+                samples, sr = model.create(chunk, voice=voice, speed=speed)
+                rendered.put(audio.resample(samples, sr, dst))
+        except Exception as e:
+            log(f"synth failed: {e!r}")
+        finally:
+            rendered.put(None)  # sentinel
+
+    threading.Thread(target=produce, daemon=True).start()
+
+    stream = audio.open_output_stream(dst)
+    try:
+        while True:
+            wave = rendered.get()
+            if wave is None:
+                break
+            stream.write(wave)
+    finally:
+        stream.stop()
+        stream.close()
 
 
 def worker():
@@ -111,11 +148,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._respond(200)
+        elif self.path == "/warmup":
+            threading.Thread(target=warmup, daemon=True).start()
+            self._respond(202, b"warming")
         else:
             self._respond(404, b"not found")
 
     def do_POST(self):
         global _last_used
+        if self.path == "/warmup":
+            threading.Thread(target=warmup, daemon=True).start()
+            self._respond(202, b"warming")
+            return
         if self.path != "/speak":
             self._respond(404, b"not found")
             return
@@ -140,6 +184,7 @@ def main():
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=idle_watchdog, daemon=True).start()
+    threading.Thread(target=warmup, daemon=True).start()  # warm at boot, non-blocking
     log(f"listening on 127.0.0.1:{PORT}")
     server.serve_forever()
 
