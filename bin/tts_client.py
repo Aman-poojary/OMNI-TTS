@@ -65,9 +65,10 @@ def speak_daemon(text, cfg):
 
 
 def speak_fallback(text, cfg):
-    """System TTS fallback (generalized per-OS in Task 06)."""
-    if sys.platform == "darwin":
-        subprocess.run(["say", "-v", cfg["say_voice"], text])
+    """Per-OS system-TTS fallback when the daemon is unavailable."""
+    import fallback
+
+    fallback.speak(text, cfg.get("say_voice"))
 
 
 def main():
