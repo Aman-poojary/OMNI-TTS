@@ -1,0 +1,7 @@
+{
+  "engine": "kokoro",
+  "voice": "bm_george",
+  "speed": 1.0,
+  "say_voice": "Daniel",
+  "max_chars": 1200
+}

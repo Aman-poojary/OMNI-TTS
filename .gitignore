@@ -1,0 +1,9 @@
+# Runtime artifacts (live in ~/.claude/jarvis, but just in case)
+*.log
+__pycache__/
+*.pyc
+venv/
+models/
+speak_on
+speak_once
+.DS_Store
