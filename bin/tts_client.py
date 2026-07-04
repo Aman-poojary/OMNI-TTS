@@ -21,6 +21,7 @@ PORT = int(os.environ.get("JARVIS_TTS_PORT", "7739"))
 BASE = f"http://127.0.0.1:{PORT}"
 DAEMON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts_daemon.py")
 LOG = os.path.join(JARVIS_HOME, "daemon.log")
+LOG_MAX_BYTES = 64 * 1024  # keep the daemon log bounded (see trim_log)
 
 
 def venv_python():
@@ -38,12 +39,34 @@ def health(timeout=1.0):
         return False
 
 
+def trim_log():
+    """Keep daemon.log bounded to its most recent LOG_MAX_BYTES.
+
+    The log is append-only across every daemon (re)start, so without this a
+    single old one-off error — e.g. a transient PortAudio -9986 from before a
+    fix — lingers in the tail forever and looks like a recurring failure.
+    Trimming on each cold start lets stale lines age out."""
+    marker = b"[jarvis-ttsd] (older log lines trimmed)\n"
+    try:
+        if os.path.getsize(LOG) <= LOG_MAX_BYTES:
+            return
+        with open(LOG, "rb") as f:
+            f.seek(-(LOG_MAX_BYTES - len(marker)), os.SEEK_END)
+            tail = f.read()
+        tail = tail.split(b"\n", 1)[1] if b"\n" in tail else tail  # drop partial line
+        with open(LOG, "wb") as f:
+            f.write(marker + tail)
+    except OSError:
+        pass
+
+
 def ensure_daemon():
     if health():
         return True
     py = venv_python()
     if not (os.path.exists(py) and os.path.exists(DAEMON)):
         return False
+    trim_log()
     with open(LOG, "ab") as logf:
         subprocess.Popen([py, DAEMON], stdout=logf, stderr=logf, start_new_session=True)
     deadline = time.time() + 60

@@ -30,6 +30,7 @@ DEFAULTS = {
     "speed": 1.0,            # kokoro speech-speed multiplier
     "say_voice": "Daniel",   # system-TTS fallback voice
     "max_chars": 1200,       # truncate spoken text beyond this
+    "output_device": "",     # "" = system default; else device name substring or index
 }
 
 # env var -> config key. Env always wins (per-run override).
@@ -39,6 +40,7 @@ _ENV_KEYS = {
     "JARVIS_KOKORO_SPEED": "speed",
     "JARVIS_VOICE": "say_voice",
     "JARVIS_MAX_CHARS": "max_chars",
+    "JARVIS_OUTPUT_DEVICE": "output_device",
 }
 
 _CASTS = {"speed": float, "max_chars": int}
@@ -119,6 +121,20 @@ def set_session_value(session_id, key, value):
     data = _read_json(path)
     data[key] = value
     with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    return data
+
+
+def set_global_value(key, value):
+    """Write one key into the global config file (applies to all sessions).
+
+    Used for machine-level settings like ``output_device`` that aren't
+    per-conversation. Returns the updated global config dict."""
+    ensure_dirs()
+    data = _read_json(CONFIG_PATH)
+    data[key] = value
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
     return data

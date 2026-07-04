@@ -9,13 +9,29 @@ playback). Resampling logic ported from jarvis-v3 jarvis/speaker.py::render.
 from math import gcd
 
 
-def _output_device():
+def _resolve_output(device=None):
+    """Resolve an output-device spec to a sounddevice index.
+
+    ``None``/``""`` -> the current system default (returns ``None`` so
+    sounddevice picks it). An int (or digit string) is used as-is. Any other
+    string is matched case-insensitively as a substring against the names of
+    output-capable devices (so ``"MacBook Pro Speakers"`` or just ``"macbook"``
+    both work). An unmatched name falls back to the system default.
+    """
     import sounddevice as sd
 
-    dev = sd.default.device
-    if isinstance(dev, (list, tuple)):
-        return dev[1]
-    return dev
+    if device is None or device == "":
+        return None
+    if isinstance(device, int):
+        return device
+    s = str(device).strip()
+    if s.isdigit():
+        return int(s)
+    needle = s.lower()
+    for i, d in enumerate(sd.query_devices()):
+        if d["max_output_channels"] > 0 and needle in d["name"].lower():
+            return i
+    return None  # no match: fall back to the system default
 
 
 def reset():
@@ -32,11 +48,21 @@ def reset():
     sd._initialize()
 
 
-def device_rate():
-    """Native sample rate of the current output device."""
+def _output_info(device=None):
     import sounddevice as sd
 
-    return int(sd.query_devices(_output_device(), "output")["default_samplerate"])
+    idx = _resolve_output(device)
+    return sd.query_devices(kind="output") if idx is None else sd.query_devices(idx, "output")
+
+
+def device_name(device=None):
+    """Human-readable name of the device that would actually be played to."""
+    return _output_info(device)["name"]
+
+
+def device_rate(device=None):
+    """Native sample rate of the resolved output device."""
+    return int(_output_info(device)["default_samplerate"])
 
 
 def resample(audio, src_rate, dst_rate):
@@ -60,14 +86,19 @@ def play(audio, rate):
     sd.wait()
 
 
-def open_output_stream(rate, channels=1):
+def open_output_stream(rate, channels=1, device=None):
     """Open and start a streaming output for producer/consumer playback.
 
-    Write float32 chunks with ``stream.write(chunk)``; ``stream.abort()`` cuts
-    playback immediately (used by /stop). Caller must close the stream.
+    ``device`` selects the output (see ``_resolve_output``); ``None`` uses the
+    system default. Write float32 chunks with ``stream.write(chunk)``;
+    ``stream.abort()`` cuts playback immediately (used by /stop). Caller must
+    close the stream.
     """
     import sounddevice as sd
 
-    stream = sd.OutputStream(samplerate=rate, channels=channels, dtype="float32")
+    stream = sd.OutputStream(
+        samplerate=rate, channels=channels, dtype="float32",
+        device=_resolve_output(device),
+    )
     stream.start()
     return stream

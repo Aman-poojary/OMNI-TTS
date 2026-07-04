@@ -54,8 +54,9 @@ session-end). Hook commands are bare `python3 <entry>` calls, no shell logic.
 `~/.jarvis/armed/<session_id>` (persistent, `/jarvis-on`) and `<session_id>.once`
 (one-shot, `/jarvis`, consumed by `speak.py` after one reply). Skills call the
 `jarvis` CLI, which resolves "this session" from `--session`, then
-`CLAUDE_SESSION_ID`/`JARVIS_SESSION_ID`, then `last_session` (written by
-`remind.py` when the prompt was submitted). Arming pings `/warmup`.
+`CLAUDE_CODE_SESSION_ID` (== the hook payload id), then `last_session` (the Codex
+fallback, written by `remind.py`), then the legacy env vars. Arming pings
+`/warmup`.
 
 ## End-to-end flow
 
@@ -107,7 +108,11 @@ exposed at `/status` and rendered by the `/ui` debug page.
 
 `config.load_config(session_id)` merges built-in DEFAULTS ⊕ global
 `~/.jarvis/config.json` ⊕ session override ⊕ env (env wins). Keys: `engine`,
-`voice`, `speed`, `say_voice`, `max_chars`. Re-read every reply.
+`voice`, `speed`, `say_voice`, `max_chars`, `output_device`. Re-read every reply.
+`output_device` (`""` = system default, else a device-name substring or index)
+pins playback to a chosen output — the escape hatch for a flaky Bluetooth
+default that reports successful playback while silently in call/HFP mode. The
+daemon logs `playing to <device>` and puts the name on the `play_start` event.
 
 ## Cleanup
 
@@ -120,8 +125,20 @@ transcripts/history are read-only.
 
 ## Gotchas
 
-- Arming is **per-session**; the CLI resolves the session via `last_session`, so
-  a slash command run right after submitting the prompt targets the right session.
+- Arming is **per-session**; the CLI resolves the session from
+  `CLAUDE_CODE_SESSION_ID` — Claude Code exports it for the whole session process
+  and it is **exactly** the payload `session_id` the Stop hook receives (same as
+  the `<id>.jsonl` transcript). It must be the primary source: it's available the
+  instant a skill's `!`-preprocessing runs (before the UserPromptSubmit hook
+  writes `last_session`) and is per-process, so it survives both the ordering
+  race and a second live session clobbering the single global `last_session`
+  file. `last_session` is the **Codex** fallback (no such env var there). The
+  legacy `CLAUDE_SESSION_ID` / `JARVIS_SESSION_ID` are last resort — note
+  `CLAUDE_SESSION_ID` is normally **unset** (the real name is
+  `CLAUDE_CODE_SESSION_ID`); an earlier fix misread the id as a "different
+  namespace" when it was really that misnamed lookup falling through to
+  `last_session`, which worked for one serialized session but silently armed the
+  wrong id whenever two CLI sessions were active at once.
 - The `🔊` marker must start a line and be the **last** such line; otherwise the
   whole reply is spoken (truncated at `max_chars`).
 - Linux needs `libportaudio2` for `sounddevice` (installer warns if missing).
