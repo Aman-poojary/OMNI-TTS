@@ -13,6 +13,8 @@ Endpoints:
   POST /speak  -> 202; {"text","voice","speed","session_id"} queued for playback
   POST /stop   -> stop playback; {"session_id"} scopes it to one session,
                   empty body stops everything
+  POST /disarm -> {"session_id"} stop that session's audio and delete its
+                  arming flag + override files (same as /jarvis-off)
   POST /warmup -> load + warm the model (blocking)
 
 Behavior:
@@ -292,6 +294,8 @@ def _list_sessions():
     sessions = {}
     try:
         for name in os.listdir(ARMED_DIR):
+            if name.startswith("."):
+                continue  # .pending intent marker, not a session
             sid = name[:-5] if name.endswith(".once") else name
             entry = sessions.setdefault(sid, {"armed": "", "override": None})
             mode = "once" if name.endswith(".once") else "on"
@@ -376,7 +380,7 @@ UI_HTML = """<!doctype html>
   .txt { color:#9aa7b5; }
   .kind { color:#d9a441; }
   .kind.play_start, .kind.play_done { color:#3fbf6f; }
-  .kind.stop, .kind.superseded, .kind.synth_error { color:#e05555; }
+  .kind.stop, .kind.superseded, .kind.synth_error, .kind.disarm { color:#e05555; }
   pre { background:#0b0f13; border:1px solid #1e2630; border-radius:6px;
         padding:10px; overflow-x:auto; max-height:260px; overflow-y:auto;
         white-space:pre-wrap; }
@@ -409,6 +413,7 @@ const short = s => esc(String(s).slice(0, 12));
 const hhmmss = t => new Date(t * 1000).toLocaleTimeString();
 function stopAll(){ fetch("/stop", {method:"POST", body:"{}"}); }
 function stopSession(sid){ fetch("/stop", {method:"POST", body: JSON.stringify({session_id: sid})}); }
+function disarmSession(sid){ fetch("/disarm", {method:"POST", body: JSON.stringify({session_id: sid})}).then(tick); }
 async function tick(){
   let s;
   try { s = await (await fetch("/status")).json(); }
@@ -427,7 +432,8 @@ async function tick(){
     (s.sessions.map(x => `<tr><td class="sid">${short(x.session)}</td>
       <td>${esc(x.armed || "—")}</td><td>${x.age_secs != null ? Math.floor(x.age_secs/60)+"m" : ""}</td>
       <td class="txt">${x.override ? esc(JSON.stringify(x.override)) : ""}</td>
-      <td><button onclick="stopSession('${esc(x.session)}')">stop</button></td></tr>`).join("")
+      <td><button onclick="stopSession('${esc(x.session)}')">stop</button>
+          <button onclick="disarmSession('${esc(x.session)}')">disarm</button></td></tr>`).join("")
      || `<tr><td class="txt">no session state on disk</td></tr>`);
   document.getElementById("queue").innerHTML = s.queue.length
     ? s.queue.map(q => `<tr><td class="sid">${short(q.session)}</td>
@@ -487,6 +493,19 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_body() or {}
             stop_jobs(body.get("session_id") or None)
             self._respond(200, b"stopped")
+            return
+        if self.path == "/disarm":
+            body = self._read_body() or {}
+            sid = body.get("session_id")
+            if not sid:
+                self._respond(400, b"session_id required")
+                return
+            import cleanup
+
+            stop_jobs(sid)
+            cleanup.cleanup_session(sid)
+            event("disarm", session=sid)
+            self._respond(200, b"disarmed")
             return
         if self.path != "/speak":
             self._respond(404, b"not found")
