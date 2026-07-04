@@ -16,9 +16,11 @@ are replaced with in-memory stubs, so this runs under any python3.
 
 import os
 import sys
+import tempfile
 import threading
 import types
 
+os.environ["JARVIS_HOME"] = tempfile.mkdtemp(prefix="jarvis-daemon-test-")
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin")
 )
@@ -49,10 +51,13 @@ def make_audio_stub(fail_opens):
     def reset():
         stub.resets += 1
 
-    def device_rate():
+    def device_rate(device=None):
         return 48000
 
-    def open_output_stream(rate, channels=1):
+    def device_name(device=None):
+        return device or "System Default"
+
+    def open_output_stream(rate, channels=1, device=None):
         stub.opens += 1
         if stub.opens <= fail_opens:
             raise RuntimeError("Error opening OutputStream: Internal PortAudio error -9986")
@@ -65,6 +70,7 @@ def make_audio_stub(fail_opens):
 
     stub.reset = reset
     stub.device_rate = device_rate
+    stub.device_name = device_name
     stub.open_output_stream = open_output_stream
     stub.resample = resample
     return stub

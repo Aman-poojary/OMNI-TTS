@@ -3,12 +3,14 @@
 
 The portability seam: skills call these subcommands instead of embedding shell,
 so nothing is OS-specific. Session resolution order: --session flag, then
-CLAUDE_SESSION_ID / JARVIS_SESSION_ID env, then the last active session recorded
-by the UserPromptSubmit hook.
+CLAUDE_CODE_SESSION_ID env (Claude Code sets it per process and it equals the
+hook payload session_id), then the last active session recorded by the
+UserPromptSubmit hook (the Codex fallback), then the legacy env vars.
 
     jarvis arm | arm-once | disarm   (aliases: on / once / off)
     jarvis stop [--all] | warmup
     jarvis config [KEY VALUE]
+    jarvis output [NUMBER|NAME|default]   (list / choose the output device)
     jarvis status
     jarvis say TEXT
     jarvis ui
@@ -33,15 +35,23 @@ def resolve_session(argv):
         i = argv.index("--session")
         if i + 1 < len(argv):
             return argv[i + 1]
-    # `last_session` is written by the UserPromptSubmit hook from the SAME
-    # payload session_id the Stop hook later uses, so it always matches the
-    # session that will actually be spoken. It must win over the env vars:
-    # in the Claude Code CLI, CLAUDE_SESSION_ID is a different id namespace
-    # than the hook payload session_id, so trusting it first armed a session
-    # the Stop hook never sees (reply shows 🔊 but nothing plays). The env
-    # vars remain a fallback for direct CLI use before any prompt is submitted.
+    # CLAUDE_CODE_SESSION_ID is set by Claude Code for the whole session process
+    # and is EXACTLY the payload session_id the Stop hook receives (same value as
+    # the <id>.jsonl transcript). Because the process env is available the instant
+    # a skill's `!`-preprocessing runs — before the UserPromptSubmit hook writes
+    # `last_session`, and unaffected by any other concurrently active session — it
+    # is the correct primary: it fixes both the ordering race (arm running before
+    # `last_session` is written) and the concurrency clobber (a single global
+    # `last_session` file can't serve two live sessions at once).
+    #
+    # `last_session` stays as the Codex fallback (Codex has no such env var; its
+    # UserPromptSubmit hook records the id there). The legacy CLAUDE_SESSION_ID /
+    # JARVIS_SESSION_ID vars are last-resort — note CLAUDE_SESSION_ID is normally
+    # UNSET (the real name is CLAUDE_CODE_SESSION_ID); the earlier "different
+    # namespace" diagnosis was really just this misnamed lookup falling through.
     return (
-        config.read_last_session()
+        os.environ.get("CLAUDE_CODE_SESSION_ID")
+        or config.read_last_session()
         or os.environ.get("CLAUDE_SESSION_ID")
         or os.environ.get("JARVIS_SESSION_ID")
     )
@@ -99,6 +109,59 @@ def cmd_ui(_sid):
         webbrowser.open(url)
     except Exception:
         pass
+    return 0
+
+
+def _get(path, timeout=5):
+    try:
+        with urllib.request.urlopen(f"{tts_client.BASE}{path}", timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def cmd_output(sid, choice=None):
+    """List output devices, or select one (by number, name, or 'default')."""
+    if not tts_client.ensure_daemon():
+        print("daemon unavailable (venv/model missing?)", file=sys.stderr)
+        return 1
+    info = _get("/devices")
+    if not info:
+        print("could not read devices from daemon", file=sys.stderr)
+        return 1
+    devices = info.get("devices", [])
+
+    if choice is None:
+        selected = info.get("selected", "")
+        print("Play voice through:  (choose with: jarvis output <number|name|default>)\n")
+        star = "*" if not selected else " "
+        print(f"  {star} 0. System default"
+              + (f"  [{next((d['name'] for d in devices if d['default']), '?')}]" if devices else ""))
+        for n, d in enumerate(devices, start=1):
+            cur = "*" if selected and selected.lower() in d["name"].lower() else " "
+            tag = "  (system default)" if d["default"] else ""
+            print(f"  {cur} {n}. {d['name']}{tag}")
+        print("\n  * = currently selected")
+        return 0
+
+    # Resolve the choice to a device name ("" means system default).
+    c = choice.strip()
+    if c.lower() in ("default", "system", "0", ""):
+        device = ""
+    elif c.isdigit():
+        idx = int(c) - 1
+        if not (0 <= idx < len(devices)):
+            print(f"no device numbered {c}; run 'jarvis output' to list", file=sys.stderr)
+            return 1
+        device = devices[idx]["name"]
+    else:
+        match = next((d["name"] for d in devices if c.lower() in d["name"].lower()), None)
+        if not match:
+            print(f"no device matching {c!r}; run 'jarvis output' to list", file=sys.stderr)
+            return 1
+        device = match
+    _post("/output_device", body={"device": device})
+    print(f"voice will play through: {device or 'system default'}")
     return 0
 
 
@@ -180,6 +243,8 @@ def main():
         return cmd_stop(sid, everything="--all" in rest)
     if cmd == "warmup":
         return cmd_warmup(sid)
+    if cmd in ("output", "device", "devices"):
+        return cmd_output(sid, " ".join(rest).strip() or None)
     if cmd == "ui":
         return cmd_ui(sid)
     if cmd == "config":

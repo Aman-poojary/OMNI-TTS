@@ -193,13 +193,17 @@ def _put_sentinel(q):
                 pass
 
 
-def _open_fresh_stream():
-    """Device rate + output stream against a freshly enumerated device list."""
+def _open_fresh_stream(device):
+    """Device rate + output stream against a freshly enumerated device list.
+
+    ``device`` is the configured output (name/index, or None for the system
+    default), honored so the user can pin playback to a reliable device instead
+    of following a flaky Bluetooth default that plays silently in call mode."""
     import audio
 
     audio.reset()
-    dst = audio.device_rate()
-    return dst, audio.open_output_stream(dst)
+    dst = audio.device_rate(device)
+    return dst, audio.open_output_stream(dst, device=device)
 
 
 def speak_system_fallback(job):
@@ -225,11 +229,15 @@ def render_and_play(job):
     if not chunks or abort.is_set():
         return  # stopped while we were setting up: don't touch the device
 
+    # Honor a configured output device (else system default). Machine-level, so
+    # read from merged config for this session.
+    device = load_config(job["session"]).get("output_device") or None
+
     # The output device can change or vanish between jobs (AirPods, USB
     # audio, display speakers); open against a fresh device list, retry once,
     # and drop to the system TTS rather than staying silent.
     try:
-        dst, stream = _open_fresh_stream()
+        dst, stream = _open_fresh_stream(device)
     except Exception as e:
         event("device_error", session=job["session"], error=repr(e))
         log(f"output device unavailable, retrying: {e!r}")
@@ -237,7 +245,7 @@ def render_and_play(job):
         if abort.is_set():
             return
         try:
-            dst, stream = _open_fresh_stream()
+            dst, stream = _open_fresh_stream(device)
         except Exception as e:
             event("device_error", session=job["session"], error=repr(e))
             log(f"output device still unavailable, using system TTS: {e!r}")
@@ -269,7 +277,13 @@ def render_and_play(job):
 
     threading.Thread(target=produce, daemon=True).start()
 
-    event("play_start", session=job["session"], chars=len(job["text"]))
+    try:
+        import audio
+        dev_name = audio.device_name(device)
+    except Exception:
+        dev_name = ""
+    event("play_start", session=job["session"], chars=len(job["text"]), device=dev_name)
+    log(f"playing to {dev_name!r}" if dev_name else "playing to system default")
     started = time.time()
     _set_current_stream(stream)
     try:
@@ -325,6 +339,29 @@ def idle_watchdog():
         if not busy and time.time() - _last_used > IDLE_EXIT_SECS:
             log("idle timeout, exiting")
             os._exit(0)
+
+
+def list_output_devices():
+    """Output-capable devices as of a fresh enumeration, marking the current
+    system default. Re-enumerates first so newly-connected devices appear."""
+    import audio
+    import sounddevice as sd
+
+    audio.reset()
+    try:
+        default_idx = sd.default.device[1]
+    except Exception:
+        default_idx = None
+    devices = []
+    for i, d in enumerate(sd.query_devices()):
+        if d["max_output_channels"] > 0:
+            devices.append({
+                "index": i,
+                "name": d["name"],
+                "default": i == default_idx,
+                "rate": int(d["default_samplerate"]),
+            })
+    return devices
 
 
 def _list_sessions():
@@ -384,6 +421,7 @@ def status_payload():
         "current": current,
         "queue": pending,
         "events": list(_events)[-60:],
+        "output_device": load_config(None).get("output_device", ""),
         "sessions": _list_sessions(),
         "logs": {
             "hook": _tail(os.path.join(JARVIS_HOME, "hook.log")),
@@ -416,7 +454,11 @@ UI_HTML = """<!doctype html>
   .btn.danger { color:#f0a0a0; border-color:#4a2626; }
   .btn.danger:hover { background:#3a1c1c; }
   .btn.sm { padding:2px 9px; font-size:12px; }
-  .sub { color:#6f7d8c; font-size:12.5px; margin:0 0 18px; }
+  select { background:#1e2630; color:#c9d4e0; border:1px solid #2c3745;
+           border-radius:6px; padding:5px 8px; font:inherit; font-size:13px; max-width:230px; }
+  .outbar { display:flex; align-items:center; gap:8px; margin:0 0 18px; flex-wrap:wrap; }
+  .outbar label { color:#6f7d8c; font-size:12.5px; }
+  .sub { color:#6f7d8c; font-size:12.5px; margin:0 0 10px; }
   .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
            gap:10px; margin-bottom:18px; }
   .card { background:#151b23; border:1px solid #1e2630; border-radius:8px; padding:11px 13px; }
@@ -469,6 +511,12 @@ UI_HTML = """<!doctype html>
 </header>
 <p class="sub" id="sub">Local text-to-speech daemon. This page refreshes every 2 seconds.</p>
 
+<div class="outbar">
+  <label for="outdev">🎧 Play voice through:</label>
+  <select id="outdev"><option value="">System default</option></select>
+  <button class="btn sm" id="devrefresh" title="Re-scan for devices">↻</button>
+</div>
+
 <div class="cards" id="cards"></div>
 <div class="now idle" id="now">Idle — nothing is playing right now.</div>
 
@@ -518,6 +566,7 @@ const EV = {
   device_error:["🔌", "Audio device problem", "err"],
   play_error:  ["⚠️", "Playback failed", "err"],
   disarm:      ["🔕", "Voice turned off", ""],
+  output_device:["🎧", "Output device changed", "good"],
   sweep:       ["🧹", "Cleaned up old sessions", ""],
 };
 function evDetail(e){
@@ -554,6 +603,29 @@ function offline(){
   document.getElementById("pilltxt").textContent = "daemon offline";
 }
 
+// Output-device picker. Options are fetched on demand (device lists don't
+// change often); the current selection is re-synced every tick from /status.
+let selectedDevice = null;
+async function loadDevices(){
+  let d;
+  try { d = await (await fetch("/devices")).json(); } catch(e){ return; }
+  const sel = document.getElementById("outdev");
+  const opts = ['<option value="">System default' +
+    (d.devices.find(x => x.default) ? ' (' + esc(d.devices.find(x => x.default).name) + ')' : '') +
+    '</option>'];
+  for (const dev of d.devices)
+    opts.push(`<option value="${esc(dev.name)}">${esc(dev.name)}${dev.default ? " — default" : ""}</option>`);
+  sel.innerHTML = opts.join("");
+  selectedDevice = d.selected || "";
+  sel.value = selectedDevice;
+}
+document.getElementById("outdev").addEventListener("change", e => {
+  selectedDevice = e.target.value;
+  post("/output_device", JSON.stringify({device: e.target.value}));
+});
+document.getElementById("devrefresh").onclick = loadDevices;
+loadDevices();
+
 async function tick(){
   let s;
   try { s = await (await fetch("/status")).json(); }
@@ -561,6 +633,16 @@ async function tick(){
 
   document.getElementById("pill").className = "pill online";
   document.getElementById("pilltxt").textContent = "online";
+
+  // Keep the picker in sync if it changed elsewhere (e.g. the jarvis CLI),
+  // but never yank the menu out from under an open selection.
+  const sel = document.getElementById("outdev");
+  if (s.output_device != null && s.output_device !== selectedDevice
+      && document.activeElement !== sel){
+    selectedDevice = s.output_device;
+    if ([...sel.options].some(o => o.value === selectedDevice)) sel.value = selectedDevice;
+    else loadDevices();
+  }
 
   const card = (label, value, cls) =>
     `<div class="card"><div class="label">${label}</div><div class="value ${cls||''}">${value}</div></div>`;
@@ -638,6 +720,13 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/status":
             body = json.dumps(status_payload()).encode("utf-8")
             self._respond(200, body, "application/json")
+        elif self.path == "/devices":
+            try:
+                payload = {"devices": list_output_devices(),
+                           "selected": load_config(None).get("output_device", "")}
+            except Exception as e:
+                payload = {"devices": [], "selected": "", "error": repr(e)}
+            self._respond(200, json.dumps(payload).encode("utf-8"), "application/json")
         elif self.path in ("/ui", "/"):
             self._respond(200, UI_HTML.encode("utf-8"), "text/html; charset=utf-8")
         elif self.path == "/warmup":
@@ -663,6 +752,17 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_body() or {}
             stop_jobs(body.get("session_id") or None)
             self._respond(200, b"stopped")
+            return
+        if self.path == "/output_device":
+            # Machine-level: choose which device replies play through. Empty
+            # string = follow the system default. Written to global config so
+            # it applies across sessions.
+            import config
+            body = self._read_body() or {}
+            dev = body.get("device") or ""
+            config.set_global_value("output_device", dev)
+            event("output_device", device=dev or "(system default)")
+            self._respond(200, b"ok")
             return
         if self.path == "/disarm":
             # Turn voice off for a session: remove its arming flag (so it drops
