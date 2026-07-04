@@ -18,6 +18,20 @@ def _output_device():
     return dev
 
 
+def reset():
+    """Re-enumerate audio devices.
+
+    PortAudio snapshots the device list when it initializes, so a long-running
+    process never sees a default-output change (AirPods pairing, USB audio
+    coming/going) and opens streams against a stale device (PaMacCore '!obj',
+    error -9986). Terminating and re-initializing re-reads the current list.
+    """
+    import sounddevice as sd
+
+    sd._terminate()
+    sd._initialize()
+
+
 def device_rate():
     """Native sample rate of the current output device."""
     import sounddevice as sd

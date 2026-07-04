@@ -22,6 +22,8 @@ from textproc import clean_for_speech, pick_speech_source  # noqa: E402
 
 CLIENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts_client.py")
 
+POLL_DEADLINE_SECS = 6.0
+
 
 def debug_log(msg):
     try:
@@ -31,22 +33,30 @@ def debug_log(msg):
         pass
 
 
+def resolve_speech(data, deadline_secs=POLL_DEADLINE_SECS, poll_interval=0.2):
+    """Return (raw, spoken) for the CURRENT reply, polling until its 🔊 source
+    is visible.
+
+    The provider may flush the final reply a beat after Stop fires, and in a
+    multi-tool turn the mid-turn narration messages are already flushed — so a
+    non-empty read is NOT proof the reply is current. Poll until a speakable
+    🔊 paragraph appears; on timeout fail closed (a genuinely marker-less
+    reply stays silent by design)."""
+    deadline = time.time() + deadline_secs
+    raw = last_assistant_text(data)
+    while not pick_speech_source(raw) and time.time() < deadline:
+        time.sleep(poll_interval)
+        raw = last_assistant_text(data)
+    return raw, clean_for_speech(pick_speech_source(raw))
+
+
 def main():
     data = read_stdin_json()
     session_id = get_session_id(data)
     if not should_speak(session_id):
         sys.exit(0)
 
-    # The provider may flush the new reply to the transcript a beat after Stop
-    # fires; payload returns "" until the post-prompt reply is visible, so poll
-    # briefly rather than re-speak the previous reply. Stay silent on timeout.
-    deadline = time.time() + 6.0
-    raw = last_assistant_text(data)
-    while not raw and time.time() < deadline:
-        time.sleep(0.2)
-        raw = last_assistant_text(data)
-
-    text = clean_for_speech(pick_speech_source(raw))
+    raw, text = resolve_speech(data)
     debug_log(f"session={session_id!r} raw_len={len(raw)} spoken_len={len(text)}")
     if not text:
         sys.exit(0)

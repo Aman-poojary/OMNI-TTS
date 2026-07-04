@@ -66,7 +66,9 @@ session-end). Hook commands are bare `python3 <entry>` calls, no shell logic.
 4. `Stop` → `speak.py`: `should_speak(session_id)` (consumes one-shot); read the
    current reply via the payload shim (tail-read — only the transcript's
    last 256 KB, so huge Desktop transcripts can't blow the hook timeout), polling
-   up to 6 s because Stop can fire before the provider flushes the reply line;
+   up to 6 s **until the reply's 🔊 source is visible** — Stop can fire before
+   the provider flushes the final line, and in multi-tool turns the mid-turn
+   narration is already flushed, so "non-empty" is not proof the reply is current;
    `pick_speech_source` + `clean_for_speech`; truncate at `max_chars`; spawn
    `tts_client.py` detached.
 5. `tts_client.py` — load the session's config, ensure the daemon, POST
@@ -83,7 +85,11 @@ back-to-back replies never pile up. `render_and_play` runs a producer/consumer:
 a synth thread renders each `chunk_text` chunk (first chunk is one sentence)
 and resamples it to the device rate; the worker writes chunks to a
 `sounddevice` OutputStream as they arrive. First audio lands after one
-sentence, not the whole reply. Every job carries its own abort Event: `/stop`
+sentence, not the whole reply. PortAudio snapshots the device list at init, so
+before every job the daemon re-enumerates devices (`audio.reset()`) — a
+default-output change (AirPods/USB) between jobs would otherwise open a stream
+against a stale device (-9986) and drop the job silently. A failed open is
+retried once with a fresh list, then falls back to the per-OS system TTS. Every job carries its own abort Event: `/stop`
 with `{"session_id"}` kills only that session's queued + playing jobs (used by
 `remind.py` barge-in and `jarvis disarm`); an empty `/stop` kills everything.
 The daemon also keeps a rolling event feed (queued/superseded/play/stop/errors)
