@@ -10,10 +10,14 @@ exact id as CLAUDE_CODE_SESSION_ID for the whole session process (same value as
 the <id>.jsonl transcript). So resolution must prefer CLAUDE_CODE_SESSION_ID: it
 is available the instant a skill's `!`-preprocessing runs — before the
 UserPromptSubmit hook writes `last_session` — and is per-process, so a second
-live session can't clobber it. `last_session` remains the Codex fallback (Codex
-has no such env var). CLAUDE_SESSION_ID is a legacy last resort and is normally
-UNSET; the earlier "different namespace" diagnosis was really that misnamed
-lookup silently falling through.
+live session can't clobber it.
+
+`last_session` is the CODEX fallback only (Codex has no such env var). Under
+Claude Code (CLAUDECODE=1) it is never consulted: if CLAUDE_CODE_SESSION_ID is
+missing there, resolution fails CLOSED (returns "") rather than guessing from
+the single global `last_session`, which names whichever session prompted last
+and would silently arm the WRONG session on a switch. CLAUDE_SESSION_ID is a
+legacy last resort and is normally UNSET.
 """
 
 import os
@@ -39,7 +43,10 @@ def main():
     OTHER = "3e5e7c79-other-live-session"    # a different concurrently-active session
 
     # Start from a clean env (the real session running the test exports these).
-    for var in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "JARVIS_SESSION_ID"):
+    # CLAUDECODE is included so the Codex-fallback cases below model a genuine
+    # non-Claude environment even when the test itself runs under Claude Code.
+    for var in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID",
+                "JARVIS_SESSION_ID", "CLAUDECODE"):
         os.environ.pop(var, None)
 
     # The core fix: CLAUDE_CODE_SESSION_ID is the payload id and must win, even
@@ -55,9 +62,19 @@ def main():
     ok &= check("--session overrides everything",
                 cli.resolve_session(["--session", "explicit-id"]) == "explicit-id")
 
-    # Codex fallback: no CLAUDE_CODE_SESSION_ID, so `last_session` (written by
-    # Codex's UserPromptSubmit hook) resolves the session.
+    # Fail-loud under Claude Code: if we know we're in Claude (CLAUDECODE=1) but
+    # CLAUDE_CODE_SESSION_ID is missing, resolution must NOT fall back to the
+    # global last_session (that would arm whichever session prompted last). It
+    # returns "" so the CLI reports "no active session" instead of arming OTHER.
     del os.environ["CLAUDE_CODE_SESSION_ID"]
+    os.environ["CLAUDECODE"] = "1"
+    config.write_last_session(OTHER)
+    ok &= check("Claude Code never guesses from last_session (fails closed)",
+                cli.resolve_session([]) == "")
+    del os.environ["CLAUDECODE"]
+
+    # Codex fallback: no CLAUDE_CODE_SESSION_ID and NOT Claude Code, so
+    # `last_session` (written by Codex's UserPromptSubmit hook) resolves it.
     config.write_last_session(REAL)
     ok &= check("last_session used when CLAUDE_CODE_SESSION_ID is unset",
                 cli.resolve_session([]) == REAL)

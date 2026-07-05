@@ -12,6 +12,7 @@ other sessions' audio.
 
 import json
 import os
+import subprocess
 import sys
 import urllib.request
 
@@ -19,6 +20,27 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from armed import is_armed, refresh  # noqa: E402
 from config import write_last_session  # noqa: E402
 from payload import get_session_id, read_stdin_json  # noqa: E402
+
+CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
+
+
+def warm_async():
+    """Kick off a detached daemon warmup the moment an armed prompt is submitted.
+
+    The assistant then spends seconds thinking and generating — exactly the
+    window to load/warm the model — so by the time the Stop hook fires the
+    daemon is hot and first audio lands quickly. Covers the common latency
+    culprit: the daemon having idle-exited between replies. Detached and
+    best-effort, so it never delays prompt submission."""
+    try:
+        subprocess.Popen(
+            [sys.executable or "python3", CLI, "warmup"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        pass
 
 
 def barge_in(session_id):
@@ -43,6 +65,7 @@ def main():
     if is_armed(session_id):
         refresh(session_id)     # active session: keep the age sweep away
         barge_in(session_id)    # new prompt supersedes this session's speech
+        warm_async()            # warm during generation so first audio is quick
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",

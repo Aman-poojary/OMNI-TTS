@@ -29,7 +29,7 @@ DEFAULTS = {
     "voice": "bm_george",    # kokoro voice name
     "speed": 1.0,            # kokoro speech-speed multiplier
     "say_voice": "Daniel",   # system-TTS fallback voice
-    "max_chars": 1200,       # truncate spoken text beyond this
+    "max_chars": 0,          # truncate spoken text beyond this; 0 = no limit
     "output_device": "",     # "" = system default; else device name substring or index
 }
 

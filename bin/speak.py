@@ -50,6 +50,15 @@ def resolve_speech(data, deadline_secs=POLL_DEADLINE_SECS, poll_interval=0.2):
     return raw, clean_for_speech(pick_speech_source(raw))
 
 
+def cap_length(text, max_chars):
+    """Enforce the spoken-length cap. ``max_chars <= 0`` means no limit — speak
+    the whole reply however long it is (the daemon chunks by sentence, so length
+    costs latency, not correctness). Only a positive cap truncates."""
+    if max_chars > 0 and len(text) > max_chars:
+        return text[:max_chars].rsplit(" ", 1)[0] + ". Response truncated, sir."
+    return text
+
+
 def main():
     data = read_stdin_json()
     session_id = get_session_id(data)
@@ -62,9 +71,7 @@ def main():
         sys.exit(0)
 
     cfg = load_config(session_id)
-    max_chars = int(cfg["max_chars"])
-    if len(text) > max_chars:
-        text = text[:max_chars].rsplit(" ", 1)[0] + ". Response truncated, sir."
+    text = cap_length(text, int(cfg["max_chars"]))
 
     # Detach the speaker so the hook returns immediately. The client loads this
     # session's effective config and talks to the daemon (or the fallback).

@@ -141,7 +141,7 @@ built-in defaults**. Edits apply on the next reply — no restart.
 | `voice` | `bm_george` | Kokoro voice: `bm_george`, `bm_lewis` (British), `am_michael`, `am_adam` (American), `af_heart`, `af_bella` (female), … |
 | `speed` | `1.0` | Speech speed multiplier |
 | `say_voice` | `Daniel` | Voice for the system-TTS fallback |
-| `max_chars` | `1200` | Truncate spoken text beyond this |
+| `max_chars` | `0` | Truncate spoken text beyond this (`0` = no limit; speak the whole reply) |
 
 `/jarvis-config` writes the current session's override. Env overrides per run:
 `JARVIS_ENGINE`, `JARVIS_KOKORO_VOICE`, `JARVIS_KOKORO_SPEED`, `JARVIS_VOICE`

@@ -18,6 +18,7 @@ UserPromptSubmit hook (the Codex fallback), then the legacy env vars.
 
 import json
 import os
+import subprocess
 import sys
 import urllib.request
 
@@ -44,17 +45,41 @@ def resolve_session(argv):
     # `last_session` is written) and the concurrency clobber (a single global
     # `last_session` file can't serve two live sessions at once).
     #
-    # `last_session` stays as the Codex fallback (Codex has no such env var; its
-    # UserPromptSubmit hook records the id there). The legacy CLAUDE_SESSION_ID /
-    # JARVIS_SESSION_ID vars are last-resort — note CLAUDE_SESSION_ID is normally
-    # UNSET (the real name is CLAUDE_CODE_SESSION_ID); the earlier "different
-    # namespace" diagnosis was really just this misnamed lookup falling through.
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if sid:
+        return sid
+    # Under Claude Code the env var above is authoritative and per-process, so if
+    # it is set we already returned it. If we are in Claude Code (CLAUDECODE=1)
+    # but it is somehow missing, we must NOT fall through to the global
+    # `last_session`: that file names whichever session prompted most recently,
+    # so with several live sessions guessing from it silently arms the WRONG
+    # session on a switch. Fail closed (return "") and let the caller report it.
+    if os.environ.get("CLAUDECODE"):
+        return ""
+    # Codex path only: no per-process id env var, so `last_session` (written by
+    # its UserPromptSubmit hook) is the intended resolver. The legacy
+    # CLAUDE_SESSION_ID / JARVIS_SESSION_ID vars are last-resort.
     return (
-        os.environ.get("CLAUDE_CODE_SESSION_ID")
-        or config.read_last_session()
+        config.read_last_session()
         or os.environ.get("CLAUDE_SESSION_ID")
         or os.environ.get("JARVIS_SESSION_ID")
     )
+
+
+def warm_detached():
+    """Ensure the daemon is up and warm in a detached process, so callers never
+    block on the cold model load (~seconds). Reused by ``arm`` and the prompt
+    hook; a no-op cost when the daemon is already warm (a quick health + warmup
+    round-trip that exits immediately)."""
+    try:
+        subprocess.Popen(
+            [sys.executable or "python3", os.path.abspath(__file__), "warmup"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        pass
 
 
 def _post(path, timeout=5, body=None):
@@ -73,8 +98,11 @@ def cmd_arm(sid, once=False):
         print("no active session found; open a session and try again", file=sys.stderr)
         return 1
     (armed.arm_once if once else armed.arm)(sid)
-    if tts_client.ensure_daemon():
-        _post("/warmup", timeout=90)
+    # Warm in a detached process: the daemon's cold spawn + model load can take
+    # seconds, and blocking here freezes the /jarvis-on slash command. The
+    # daemon self-warms at boot; this also covers the already-running-but-cold
+    # case. Warmth catches up well before the first reply's Stop hook fires.
+    warm_detached()
     print(f"armed{' (one-shot)' if once else ''}: session {sid}")
     return 0
 

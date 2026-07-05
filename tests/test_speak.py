@@ -91,6 +91,20 @@ def main():
     ok &= check("marker-less turn still fails closed", text == "")
     os.remove(path)
 
+    # Length cap: 0 (the default) speaks the whole reply however long; a
+    # positive cap truncates. A long reply must never be silently chopped
+    # mid-sentence under the default.
+    long_text = "This is a full sentence. " * 200  # ~5000 chars
+    ok &= check("max_chars=0 speaks the entire reply, no truncation",
+                speak.cap_length(long_text, 0) == long_text)
+    ok &= check("max_chars<0 also means no limit",
+                speak.cap_length(long_text, -1) == long_text)
+    capped = speak.cap_length(long_text, 100)
+    ok &= check("positive max_chars still truncates",
+                len(capped) <= 130 and capped.endswith("Response truncated, sir."))
+    ok &= check("under-cap text is returned unchanged",
+                speak.cap_length("short one.", 100) == "short one.")
+
     sys.exit(0 if ok else 1)
 
 
