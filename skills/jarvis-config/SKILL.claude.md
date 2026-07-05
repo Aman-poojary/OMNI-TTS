@@ -21,7 +21,7 @@ Keys:
   `bm_lewis`, `am_michael`, `am_adam` (American male), `af_heart`, `af_bella`
 - `speed`: Kokoro speed multiplier (e.g. `0.9` slower, `1.2` faster)
 - `say_voice`: system-TTS fallback voice (default `Daniel`)
-- `max_chars`: truncate spoken text beyond this many characters (default 1200)
+- `max_chars`: truncate spoken text beyond this many characters (default `0` = no limit, speak the whole reply)
 
 ## No arguments → present the status above conversationally, then ask what to change
 

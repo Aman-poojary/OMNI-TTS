@@ -37,7 +37,7 @@ session-end). Hook commands are bare `python3 <entry>` calls, no shell logic.
 | `armed.py` | stdlib | Per-session arming flags (persistent + one-shot). |
 | `payload.py` | stdlib | Provider payload shim: `session_id` + the current reply's text (Claude transcript, inline Codex fallback). Only accepts assistant text written after the newest user prompt and skips sidechain entries — returns `""` until the reply is flushed, so a Stop that races the transcript write never re-speaks the previous reply. |
 | `textproc.py` | stdlib | `pick_speech_source`, `clean_for_speech`, `chunk_text` (small first chunk). |
-| `remind.py` | stdlib | `UserPromptSubmit` hook. Records last session; if armed: injects the 🔊 instruction, refreshes flag mtimes (sweep protection), and barge-ins (session-scoped `/stop`). |
+| `remind.py` | stdlib | `UserPromptSubmit` hook. Records last session; if armed: injects the 🔊 instruction, refreshes flag mtimes (sweep protection), barge-ins (session-scoped `/stop`), and fires a detached warmup so the model is hot by the time the reply's Stop hook fires. |
 | `statusline.py` | stdlib | Claude `statusLine` segment: armed state, daemon warm/speaking, session-state presence. |
 | `speak.py` | stdlib | `Stop` hook orchestrator. Speaks only if this session is armed; detaches the client; always exits 0. |
 | `tts_client.py` | stdlib | Ensures the daemon (cross-platform venv), POSTs `{text,voice,speed}`, else per-OS fallback. |
@@ -54,15 +54,20 @@ session-end). Hook commands are bare `python3 <entry>` calls, no shell logic.
 `~/.jarvis/armed/<session_id>` (persistent, `/jarvis-on`) and `<session_id>.once`
 (one-shot, `/jarvis`, consumed by `speak.py` after one reply). Skills call the
 `jarvis` CLI, which resolves "this session" from `--session`, then
-`CLAUDE_CODE_SESSION_ID` (== the hook payload id), then `last_session` (the Codex
-fallback, written by `remind.py`), then the legacy env vars. Arming pings
-`/warmup`.
+`CLAUDE_CODE_SESSION_ID` (== the hook payload id). Under Claude Code
+(`CLAUDECODE=1`) that env var is authoritative: if it's missing, resolution
+**fails closed** (returns `""` → "no active session") rather than guessing from
+the single global `last_session`. `last_session` is the **Codex-only** fallback
+(no such env var there), below it the legacy env vars. Arming warms the daemon
+in a **detached** process so `/jarvis-on` never blocks on the cold model load.
 
 ## End-to-end flow
 
-1. `/jarvis-on` → `jarvis arm` writes `~/.jarvis/armed/<sid>` and pings `/warmup`.
+1. `/jarvis-on` → `jarvis arm` writes `~/.jarvis/armed/<sid>` and kicks off a
+   detached warmup (never blocks the slash command).
 2. You send a message → `remind.py` records the session and (if armed) injects
-   the "write a 🔊 line" instruction.
+   the "write a 🔊 line" instruction and fires a detached warmup, so the daemon
+   is hot again even if it idle-exited since the last reply.
 3. Assistant replies, ending with `🔊 <spoken answer>`.
 4. `Stop` → `speak.py`: `should_speak(session_id)` (consumes one-shot); read the
    current reply via the payload shim (tail-read — only the transcript's
@@ -70,8 +75,8 @@ fallback, written by `remind.py`), then the legacy env vars. Arming pings
    up to 6 s **until the reply's 🔊 source is visible** — Stop can fire before
    the provider flushes the final line, and in multi-tool turns the mid-turn
    narration is already flushed, so "non-empty" is not proof the reply is current;
-   `pick_speech_source` + `clean_for_speech`; truncate at `max_chars`; spawn
-   `tts_client.py` detached.
+   `pick_speech_source` + `clean_for_speech`; truncate at `max_chars` (0 = no
+   limit, the default); spawn `tts_client.py` detached.
 5. `tts_client.py` — load the session's config, ensure the daemon, POST
    `{text, voice, speed}`; else per-OS fallback.
 6. `tts_daemon.py` — enqueue; the FIFO worker streams synth→playback.
@@ -99,7 +104,9 @@ exposed at `/status` and rendered by the `/ui` debug page.
 ## Model & lifecycle
 
 - Kokoro-82M ONNX (`kokoro-v1.0.onnx` + `voices-v1.0.bin` in `~/.jarvis/models/`).
-- Warmed on a background thread at daemon boot; `/warmup` re-triggers at arm time.
+- Warmed on a background thread at daemon boot; a detached `/warmup` re-triggers
+  at arm time **and on every armed prompt** (`remind.py`), so a daemon that
+  idle-exited is hot again before the reply finishes — the main latency lever.
 - `OMP_NUM_THREADS` set to the core count before load (`JARVIS_TTS_THREADS`
   overrides) for faster CPU synthesis.
 - ~1 GB RSS while warm. Idle self-exit after `JARVIS_TTS_IDLE_EXIT` (1800s).
@@ -132,13 +139,13 @@ transcripts/history are read-only.
   instant a skill's `!`-preprocessing runs (before the UserPromptSubmit hook
   writes `last_session`) and is per-process, so it survives both the ordering
   race and a second live session clobbering the single global `last_session`
-  file. `last_session` is the **Codex** fallback (no such env var there). The
-  legacy `CLAUDE_SESSION_ID` / `JARVIS_SESSION_ID` are last resort — note
-  `CLAUDE_SESSION_ID` is normally **unset** (the real name is
-  `CLAUDE_CODE_SESSION_ID`); an earlier fix misread the id as a "different
-  namespace" when it was really that misnamed lookup falling through to
-  `last_session`, which worked for one serialized session but silently armed the
-  wrong id whenever two CLI sessions were active at once.
+  file. Under Claude Code (`CLAUDECODE=1`) resolution **never** falls back to
+  `last_session`: if `CLAUDE_CODE_SESSION_ID` is somehow missing it returns `""`
+  and the CLI reports "no active session" — failing closed beats silently arming
+  whichever session prompted last (the switching bug). `last_session` is the
+  **Codex-only** fallback (no such env var there). The legacy `CLAUDE_SESSION_ID`
+  / `JARVIS_SESSION_ID` are last resort — note `CLAUDE_SESSION_ID` is normally
+  **unset** (the real name is `CLAUDE_CODE_SESSION_ID`).
 - The `🔊` marker must start a line and be the **last** such line; otherwise the
   whole reply is spoken (truncated at `max_chars`).
 - Linux needs `libportaudio2` for `sounddevice` (installer warns if missing).
